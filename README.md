@@ -25,6 +25,9 @@ battles:
    link to each battle appears under **Ready for review** in the tray icon's
    **Status...** window.
 
+
+# Quick Install
+
 ## Install
 
 You need Windows 10 or 11, the game, and a free
