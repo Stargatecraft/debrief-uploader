@@ -157,6 +157,14 @@ class TestWindowsBuild(unittest.TestCase):
         self.ui._thread = self._real_thread
         self.ui._root = self._real_root
         os.environ.pop("GD_UPLOADER_HOME", None)
+        # Free this test's Tk objects now, on the thread that made them, as
+        # ui._thread does in the app. Left to the cyclic GC they are freed on
+        # whatever thread runs it next - a background thread left over from
+        # an earlier suite - and Tcl aborts the whole run with
+        # "Tcl_AsyncDelete: async handler deleted by the wrong thread"
+        # (Windows CI, 2026-10-11).
+        import gc
+        gc.collect()
 
     def test_settings_window_builds(self):
         self.ui.open_settings(self.app)
