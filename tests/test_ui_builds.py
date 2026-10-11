@@ -203,8 +203,13 @@ class TestWindowsBuild(unittest.TestCase):
             r.after(300, lambda: store.rows.insert(
                 0, _row(md5="new", short_code="def456")))
 
+            def walk(w_):
+                yield w_
+                for c_ in w_.winfo_children():
+                    yield from walk(c_)
+
             def check():
-                t = [x for x in r.winfo_children() if isinstance(x, tk.Text)][0]
+                t = next(x for x in walk(r) if isinstance(x, tk.Text))
                 seen["text"] = t.get("1.0", "end")
                 r.destroy()
             r.after(2600, check)       # one REFRESH_MS (2 s) after the insert
@@ -506,6 +511,156 @@ class TestWindowsBuild(unittest.TestCase):
         self.assertEqual(self.errors, [])
         self.assertEqual(seen["grips"], [seen["x"]] * 2)
         self.assertNotEqual(seen["after"][0], seen["x"])
+
+    # ---- one scrolling, reflowing body in every window (PR #6) ----------
+    # These drive the window from inside its own mainloop with after():
+    # r.update() from outside it never returns on macOS's system Tk 8.5.
+
+    def _walk(self, w):
+        yield w
+        for c in w.winfo_children():
+            yield from self._walk(c)
+
+    def _drive(self, opener, steps):
+        """Open a window and run steps, a list of (fn(r), wait_ms), in order
+        inside its mainloop, waiting wait_ms after each; the window is
+        closed after the last."""
+        real_root = self._real_root
+        failures = []
+
+        def root(title, w, h):
+            r = real_root(title, w, h)
+            plan = list(steps)
+
+            def run(i):
+                if not r.winfo_exists():
+                    return
+                if i == len(plan):
+                    r.after_cancel(guard)
+                    r.destroy()
+                    return
+                fn, delay = plan[i]
+                try:
+                    fn(r)
+                except Exception as e:      # report, never hang the suite
+                    failures.append(e)
+                    r.destroy()
+                    return
+                r.after(delay, lambda: run(i + 1))
+            r.after(500, lambda: run(0))
+            guard = r.after(15000, lambda: r.winfo_exists() and r.destroy())
+            return r
+
+        self.ui._root = root
+        opener()
+        self.assertEqual(self.errors, [])
+        if failures:
+            raise failures[0]
+
+    def _held(self, n):
+        class LongNames(FakeEngine):
+            def _label(self, row):
+                # a real replay name: long, and without a single space
+                return ("20261009_183132_PXSD013-Split-HW26_HW26_%s_"
+                        "Hotspot.wowsreplay" % row["md5"])
+        self.app.eng = LongNames()
+        self.app.store = FakeStore(held=[
+            _row(md5="h%d" % i, state="held",
+                 note="found before the app was running - upload it?")
+            for i in range(n)])
+
+    def test_every_window_has_the_scrolling_body(self):
+        """Every window the tray opens scrolls the same way, not only
+        Settings (Stargatecraft, PR #6: "other windows need a scroll bar
+        too")."""
+        seen = {}
+
+        def look(name):
+            def fn(r):
+                hosts = [w for w in self._walk(r) if hasattr(w, "_scroll")]
+                seen[name] = [(h._scroll.c.winfo_manager(),
+                               h._scroll.c.winfo_ismapped()) for h in hosts]
+            return [(fn, 0)]
+
+        self._drive(lambda: self.ui.open_settings(self.app), look("settings"))
+        self._drive(lambda: self.ui.open_status(self.app), look("status"))
+        self._drive(lambda: self.ui.open_doctor(self.app), look("doctor"))
+        self._drive(lambda: self.ui.open_sign_in(self.app), look("sign in"))
+        self.app.store = FakeStore(held=[])
+        self._drive(lambda: self.ui.open_review(self.app), look("review, empty"))
+        self._held(2)
+        self._drive(lambda: self.ui.open_review(self.app), look("review"))
+        for name, hosts in seen.items():
+            # one body, its bar docked in the reserved gutter
+            self.assertEqual(hosts, [("place", 1)], name)
+        self.assertEqual(len(seen), 6)
+
+    def test_text_rewraps_when_the_window_is_resized(self):
+        """Labels follow the window's width both ways, so text is neither
+        cut off when narrower nor kept narrow when wider (Stargatecraft,
+        PR #6: "the text continues to be cut off by the resizing")."""
+        self._held(3)
+        seen = []
+
+        def measure(r):
+            lbls = [w for w in self._walk(r) if isinstance(w, tk.Label)
+                    and w.winfo_ismapped()
+                    and int(str(w.cget("wraplength")) or 0)]
+            self.assertTrue(lbls)
+            for l in lbls:
+                # nothing wider than the space it was given
+                self.assertLessEqual(l.winfo_reqwidth(), l.winfo_width() + 1,
+                                     l.cget("text"))
+                self.assertLessEqual(l.winfo_width(),
+                                     l.master.winfo_width(), l.cget("text"))
+            seen.append(max(int(str(l.cget("wraplength"))) for l in lbls))
+
+        px = self.ui._px
+        self._drive(lambda: self.ui.open_review(self.app), [
+            (lambda r: r.geometry("%dx%d" % (px(400), px(400))), 400),
+            (measure, 0),
+            (lambda r: r.geometry("%dx%d" % (px(900), px(400))), 400),
+            (measure, 0),
+        ])
+        narrow, wide = seen
+        self.assertLess(narrow, px(400))
+        self.assertGreater(wide, px(600))     # past the old 580 px cap
+
+    def test_overflow_scrolls_instead_of_squashing(self):
+        """Six held battles: the window scrolls, every panel keeps its full
+        height, and the buttons do not move when the bar appears
+        (Stargatecraft, PR #6: the last panel's buttons were cut in half)."""
+        self._held(6)
+        seen = {}
+        px = self.ui._px
+
+        def snap(key):
+            def fn(r):
+                body = next(w for w in self._walk(r) if hasattr(w, "_scroll"))
+                canvas = next(w for w in body.winfo_children()
+                              if isinstance(w, tk.Canvas)
+                              and w is not body._scroll.c)
+                panels = [w for w in self._walk(r) if isinstance(w, tk.Frame)
+                          and int(str(w.cget("highlightthickness")) or 0)]
+                up = [w for w in self._walk(r) if isinstance(w, tk.Button)
+                      and w.cget("text") == "Upload"][0]
+                seen[key] = dict(
+                    end=canvas.yview()[1],
+                    squashed=[p for p in panels
+                              if p.winfo_height() < p.winfo_reqheight()],
+                    upload=(up.winfo_rootx() - r.winfo_rootx(),
+                            up.winfo_width()))
+            return fn
+
+        self._drive(lambda: self.ui.open_review(self.app), [
+            (lambda r: r.geometry("%dx%d" % (px(600), px(2000))), 400),
+            (snap("tall"), 0),
+            (lambda r: r.geometry("%dx%d" % (px(600), px(360))), 400),
+            (snap("short"), 0),
+        ])
+        self.assertLess(seen["short"]["end"], 1.0)        # it scrolls
+        self.assertEqual(seen["short"]["squashed"], [])
+        self.assertEqual(seen["tall"]["upload"], seen["short"]["upload"])
 
     def test_review_window_title_matches_its_contents(self):
         """It used to say "needs you" over a window saying nothing needs you."""

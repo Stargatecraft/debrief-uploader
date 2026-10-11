@@ -119,20 +119,29 @@ def _res(*parts):
 
 
 def _label(parent, text, size=10, fg=INK, bold=False, bg=BG, **kw):
-    """A text label. With wraplength, the text wraps at that width OR the
-    parent's, whichever is narrower: a fixed wrap made the text wider than
-    its panel once the window could be resized narrower, and Tk centres an
-    over-wide label, so both edges were cut off (Stargatecraft, PR #6)."""
+    """A text label. With wraplength, the text wraps to the parent's width
+    and keeps following it as the window is resized, wider as well as
+    narrower; wraplength is only the width used before the first layout.
+    A fixed wrap made the text wider than its panel once the window could be
+    resized narrower, and Tk centres an over-wide label, so both edges were
+    cut off; a capped one left it narrow in a wide window (Stargatecraft,
+    PR #6).
+
+    Only give wraplength to a label whose parent is as wide as the window
+    lets it be (packed with fill="x", or the body itself). In a parent that
+    sizes itself to its contents the label and parent would shrink each
+    other down to the minimum."""
     import tkinter as tk
     wrap = None
     if "wraplength" in kw:
         wrap = kw["wraplength"] = _px(kw["wraplength"])
-    lbl = tk.Label(parent, text=text, bg=bg, fg=fg, justify="left",
+    kw.setdefault("justify", "left")
+    lbl = tk.Label(parent, text=text, bg=bg, fg=fg,
                    font=("Segoe UI", size, "bold" if bold else "normal"), **kw)
     if wrap:
         def fit(e, lbl=lbl):
             if e.widget is parent and lbl.winfo_exists():
-                lbl.configure(wraplength=max(_px(120), min(wrap, e.width - _px(28))))
+                lbl.configure(wraplength=max(_px(120), e.width - _px(28)))
         parent.bind("<Configure>", fit, add="+")
     return lbl
 
@@ -205,9 +214,27 @@ class _ThinScroll:
         self.c.bind("<ButtonRelease-1>", self._release)
         self.c.bind("<Enter>", lambda e: self._set_hover(True))
         self.c.bind("<Leave>", lambda e: self._set_hover(False))
+        self.c.bind("<Destroy>", lambda e: self._cancel())
+
+    def _cancel(self):
+        # a fade timer left pending fires into a destroyed window
+        if self._sleep_job:
+            try:
+                self.c.after_cancel(self._sleep_job)
+            except Exception:
+                pass
+            self._sleep_job = None
 
     def pack(self, **kw):
         self.c.pack(**kw)
+
+    def dock(self):
+        """Into the right-hand gutter of its parent, over the space _gutter()
+        keeps clear. Placed, not packed: the content never changes width when
+        the bar appears, so nothing jumps or rewraps (Stargatecraft, PR #6:
+        the buttons moved before the bar showed up)."""
+        self.c.place(relx=1, x=-(self.width + _px(6)), y=0, relheight=1,
+                     width=self.width)
 
     def set(self, first, last):
         self.first, self.last = float(first), float(last)
@@ -224,6 +251,8 @@ class _ThinScroll:
         return y0, y1, h
 
     def _wake(self):
+        if not self.c.winfo_exists():
+            return
         self._awake = True
         if self._sleep_job:
             self.c.after_cancel(self._sleep_job)
@@ -277,16 +306,107 @@ class _ThinScroll:
         self._draw()
 
 
+def _gutter():
+    """Room kept clear on the right of every window's content for the slim
+    scrollbar: the bar (8) and, outside it, more than the 5 px resize grip
+    on the window's right edge, so the grip never sits on the bar."""
+    return _px(8) + _px(6) + _px(2)
+
+
+class _Body:
+    """The scrolling content area every tray window puts its widgets in.
+
+    One implementation, so each window reflows the same way (Stargatecraft,
+    PR #6: "the widgets need to wrap the contents and adjust their width and
+    height as necessary on all windows, not just in the settings"):
+
+    - .inner is always exactly as wide as the window allows, so labels with
+      a wraplength rewrap on every resize (see _label);
+    - its height is whatever the content asks for: when that is more than
+      the window, the slim fading bar appears and the wheel scrolls, instead
+      of pack squeezing the last widgets (Review cut its own buttons in half);
+    - the bar lives in a gutter that is always reserved, so the content
+      keeps its width when the bar shows up;
+    - center=True centres short content vertically while it fits.
+
+    Text windows (status, diagnosis) scroll their Text instead; _text_body()
+    gives them the same bar in the same gutter."""
+
+    def __init__(self, r, bg=BG, padx=16, pady=14, center=False):
+        import tkinter as tk
+        self.padx, self.pady, self.center = padx, pady, center
+        self.host = tk.Frame(r, bg=bg)
+        self.host.pack(side="top", fill="both", expand=True)
+        self.canvas = tk.Canvas(self.host, bg=bg, highlightthickness=0, bd=0)
+        self.canvas.pack(fill="both", expand=True)
+        self.bar = _ThinScroll(self.host, self.canvas, bg=bg)
+        self.canvas.configure(yscrollcommand=self.bar.set)
+        self.bar.dock()
+        self.host._scroll = self.bar        # tests find the body by this
+        self.inner = tk.Frame(self.canvas, bg=bg)
+        self._win = self.canvas.create_window(padx, pady, window=self.inner,
+                                              anchor="nw")
+        self.inner.bind("<Configure>", self._layout, add="+")
+        self.canvas.bind("<Configure>", self._layout, add="+")
+        r.bind_all("<MouseWheel>", self._wheel, add="+")
+        r.bind_all("<Button-4>", self._wheel, add="+")     # X11 wheel
+        r.bind_all("<Button-5>", self._wheel, add="+")
+
+    def _layout(self, e=None):
+        c = self.canvas
+        if not c.winfo_exists():
+            return
+        w, h = c.winfo_width(), c.winfo_height()
+        if w <= 1:
+            return                   # not laid out yet
+        right = max(self.padx, _gutter())
+        c.itemconfigure(self._win, width=max(_px(120), w - self.padx - right))
+        ih = self.inner.winfo_reqheight()
+        y = self.pady
+        if self.center:
+            y = max(self.pady, (h - ih) // 2)
+        c.coords(self._win, self.padx, y)
+        c.configure(scrollregion=(0, 0, w, y + ih + self.pady))
+
+    def fits(self):
+        return self.bar.last - self.bar.first >= 0.999
+
+    def _wheel(self, e):
+        if self.fits() or not self.canvas.winfo_exists():
+            return
+        if getattr(e, "num", None) in (4, 5):
+            step = -1 if e.num == 4 else 1
+        else:
+            step = int(-e.delta / 120) or (-1 if e.delta > 0 else 1)
+        self.canvas.yview_scroll(step, "units")
+
+
+def _text_body(r, around, margin_x=0, margin_y=0, **text_kw):
+    """A scrolling Text with the same slim bar, in the same gutter, as
+    _Body. wrap="word" unless asked otherwise, so lines follow the window's
+    width instead of running off its right edge. margin_x/margin_y go around
+    it (pack padding) in the colour `around`; padx/pady/bg are the Text's
+    own."""
+    import tkinter as tk
+    host = tk.Frame(r, bg=around)
+    host.pack(side="top", fill="both", expand=True, padx=margin_x,
+              pady=margin_y)
+    text_kw.setdefault("wrap", "word")
+    t = tk.Text(host, **text_kw)
+    t.pack(side="left", fill="both", expand=True, padx=(0, _gutter()))
+    sb = _ThinScroll(host, t, bg=around)
+    t.configure(yscrollcommand=sb.set)
+    sb.dock()
+    host._scroll = sb                       # tests find the body by this
+    return t
+
+
 def _text_window(title, lines, log, what):
     def build():
-        import tkinter as tk
         r = _root(title, 760, 560)
-        t = tk.Text(r, bg=PANEL, fg=INK, insertbackground=INK, relief="flat",
-                    font=("Consolas", 9), wrap="none", padx=12, pady=10)
-        sb = _ThinScroll(r, t, bg=PANEL)
-        t.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        t.pack(fill="both", expand=True)
+        t = _text_body(r, PANEL, bg=PANEL, fg=INK, insertbackground=INK,
+                       relief="flat", font=("Consolas", 9), padx=12, pady=10,
+                       highlightthickness=0)
         t.insert("1.0", "\n".join(lines))
         t.configure(state="disabled")
         r.mainloop()
@@ -350,17 +470,13 @@ def open_status(app):
 
         r = _root("%s - status" % config.APP_NAME, 780, 600)
         head = tk.Frame(r, bg=BG)
-        head.pack(fill="x", padx=16, pady=(14, 6))
-        summary_lbl = _label(head, "", size=10, fg=MUTED)
+        head.pack(fill="x", padx=(16, _gutter()), pady=(14, 6))
+        summary_lbl = _label(head, "", size=10, fg=MUTED, wraplength=720)
         summary_lbl.pack(anchor="w")
 
-        t = tk.Text(r, bg=PANEL, fg=INK, relief="flat", font=("Segoe UI", 10),
-                    wrap="word", padx=14, pady=12, cursor="arrow",
-                    highlightthickness=0)
-        sb = _ThinScroll(r, t)
-        t.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y", padx=(_px(4), _px(6)), pady=(0, 14))
-        t.pack(fill="both", expand=True, padx=(16, 0), pady=(0, 14))
+        t = _text_body(r, BG, margin_x=(16, 0), margin_y=(0, 14),
+                       bg=PANEL, fg=INK, relief="flat", font=("Segoe UI", 10),
+                       padx=14, pady=12, cursor="arrow", highlightthickness=0)
 
         t.tag_configure("h", foreground=MUTED, font=("Segoe UI", 8, "bold"),
                         spacing1=10, spacing3=6)
@@ -458,10 +574,9 @@ def open_sign_in(app, on_done=None):
     def build():
         import tkinter as tk
         r = _root("Sign in to GamingDiver", 420, 380)
-        pad = tk.Frame(r, bg=BG)
-        pad.pack(fill="both", expand=True, padx=18, pady=16)
+        pad = _Body(r, padx=18, pady=16).inner
         _label(pad, "Use the same account as gamingdiver.com.", fg=MUTED,
-               size=9).pack(anchor="w", pady=(0, 10))
+               size=9, wraplength=380).pack(anchor="w", pady=(0, 10))
 
         # Most accounts were made with Google or Discord and have no password
         # (Greg 2026-10-05: "I used Google as my signin so I do not have an
@@ -517,7 +632,8 @@ def open_sign_in(app, on_done=None):
             bt.pack(fill="x", pady=(0, 6))
             prov_buttons.append(bt)
 
-        _label(pad, "Or with email and password:", fg=MUTED, size=9).pack(
+        _label(pad, "Or with email and password:", fg=MUTED, size=9,
+               wraplength=380).pack(
             anchor="w", pady=(4, 6))
 
         _label(pad, "Email", size=9).pack(anchor="w")
@@ -579,24 +695,29 @@ def open_review(app, on_change=None):
         r = _root(title, 660, 540 if held else 300)
 
         if not held:
-            pad = tk.Frame(r, bg=BG)
-            pad.pack(expand=True, padx=24)
-            _label(pad, "Nothing needs a decision.", size=13, bold=True).pack()
+            # the body's inner frame is always the window's width, so the
+            # wrapped lines below follow it (see _label)
+            pad = _Body(r, padx=24, center=True).inner
+            _label(pad, "Nothing needs a decision.", size=13, bold=True,
+                   wraplength=520, justify="center").pack()
             if waiting:
                 _label(pad, "%d battle%s waiting for scorecards - capture the "
                             "Personal and Team Result tabs and they will go up "
                             "on their own."
                        % (len(waiting), " is" if len(waiting) == 1 else "s are"),
-                       size=9, fg=MUTED, wraplength=520).pack(pady=(8, 0))
+                       size=9, fg=MUTED, wraplength=520,
+                       justify="center").pack(pady=(8, 0))
             else:
                 _label(pad, "Everything it has seen has been dealt with.",
-                       size=9, fg=MUTED).pack(pady=(8, 0))
+                       size=9, fg=MUTED, wraplength=520,
+                       justify="center").pack(pady=(8, 0))
             _button(pad, "Close", r.destroy).pack(pady=16)
             r.mainloop()
             return
 
-        frame = tk.Frame(r, bg=BG)
-        frame.pack(fill="both", expand=True, padx=16, pady=16)
+        # six held battles are taller than the window: they scroll, rather
+        # than pack squashing the last one's buttons (Stargatecraft, PR #6)
+        frame = _Body(r, padx=16, pady=16).inner
         thumbs = []                       # keep refs or Tk drops the images
 
         def changed():
@@ -607,8 +728,11 @@ def open_review(app, on_change=None):
             box = tk.Frame(frame, bg=PANEL, highlightbackground=LINE,
                            highlightthickness=1)
             box.pack(fill="x", pady=6)
+            # a replay file name has no spaces; Tk still breaks it at the
+            # panel's edge rather than cutting it off
             _label(box, app.eng._label(row), size=11, bold=True,
-                   bg=PANEL, anchor="w").pack(fill="x", padx=10, pady=(8, 0))
+                   bg=PANEL, anchor="w", wraplength=580).pack(
+                fill="x", padx=10, pady=(8, 0))
             _label(box, row["note"] or "needs confirmation", size=9, fg=MUTED,
                    bg=PANEL, anchor="w", wraplength=580).pack(fill="x", padx=10)
 
@@ -678,24 +802,11 @@ def open_settings(app):
         _set_size(r, min(_px(640), r.winfo_screenwidth() - 40),
                   max(min(_px(480), r.winfo_screenheight() - 120),
                       min(_px(900), r.winfo_screenheight() - 120)))
+        # the footer first, so it keeps its place as the window shrinks and
+        # the body scrolls instead
         foot = tk.Frame(r, bg=BG)
-        foot.pack(side="bottom", fill="x", padx=16, pady=(4, 12))
-        canvas = tk.Canvas(r, bg=BG, highlightthickness=0)
-        vbar = _ThinScroll(r, canvas)
-        canvas.configure(yscrollcommand=vbar.set)
-        vbar.pack(side="right", fill="y", padx=(0, _px(4)))
-        canvas.pack(side="left", fill="both", expand=True)
-        outer = tk.Frame(canvas, bg=BG)
-        win = canvas.create_window((16, 14), window=outer, anchor="nw")
-        outer.bind("<Configure>", lambda e: canvas.configure(
-            scrollregion=(0, 0, e.width + 32, e.height + 28)))
-        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(
-            win, width=max(200, e.width - 32)))
-
-        def _wheel(e):
-            if outer.winfo_reqheight() + 28 > canvas.winfo_height():
-                canvas.yview_scroll(int(-e.delta / 120) or (-1 if e.delta > 0 else 1), "units")
-        r.bind_all("<MouseWheel>", _wheel)
+        foot.pack(side="bottom", fill="x", padx=(16, _gutter()), pady=(4, 12))
+        outer = _Body(r).inner
 
         status = _label(foot, "Changes save as you make them.", size=9, fg=MUTED)
 
@@ -940,7 +1051,6 @@ def open_settings(app):
 
         def close():
             save_now()
-            r.unbind_all("<MouseWheel>")
             r.destroy()
 
         r.protocol("WM_DELETE_WINDOW", close)
