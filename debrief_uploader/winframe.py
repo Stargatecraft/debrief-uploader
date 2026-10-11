@@ -125,28 +125,27 @@ def frame(r, title, px, bg, icon, fg="#cfd8dc"):
 
     btns = []
 
-    # the top-right grips sit over the close button's outer edge; they take
-    # its colour so a hovered X is one red square, not a red square with a
-    # dark L notched out of its corner (Stargatecraft, PR #6, at 150%)
-    corner = []
-
-    def button(glyph, cmd, hover="#1b2f3d", tint_corner=False):
+    # Resize grips sit over the buttons' outer edge (top, and the X's right
+    # side). Each button tints the grips over it with its own hover colour,
+    # so a hovered X is one red square, not a red square with a dark strip
+    # notched out of its edge (Stargatecraft, PR #6, at 150%).
+    def button(glyph, cmd, hover="#1b2f3d"):
         b = tk.Label(bar, text=glyph, bg=bg, fg=fg, width=5,
                      font=("Segoe MDL2 Assets", 8))
         b.pack(side="right", fill="y")
         btns.append(b)
+        b._grips = []
         b.bind("<Button-1>", lambda e: cmd())
 
         def paint(colour, ink):
             b.configure(bg=colour, fg=ink)
-            if tint_corner:
-                for g in corner:
-                    g.configure(bg=colour)
+            for g in b._grips:
+                g.configure(bg=colour)
         b.bind("<Enter>", lambda e: paint(hover, "white" if hover != "#1b2f3d" else fg))
         b.bind("<Leave>", lambda e: paint(bg, fg))
         return b
 
-    button(CLOSE, lambda: _close(r), hover="#c42b1c", tint_corner=True)   # close
+    closebtn = button(CLOSE, lambda: _close(r), hover="#c42b1c")   # close
     maxbtn = button(MAXIMIZE, toggle_max)                  # maximize
     button(MINIMIZE, r.iconify)                            # minimize
 
@@ -172,11 +171,17 @@ def frame(r, title, px, bg, icon, fg="#cfd8dc"):
         wdg.bind("<Double-Button-1>", toggle_max)
 
     # ---- resize grips ----
+    # Every edge resizes along one axis and every corner along both, as on a
+    # native window. The top and right edges run over the title bar's
+    # buttons too: without that, the stretch where the buttons sit could
+    # not be dragged at all (Stargatecraft, PR #6). The grips there are thin
+    # strips on the outer edge, so the buttons still click.
     b = px(5)  # edge thickness
     c = px(10)  # corner size
     bh = px(32)  # title bar height
     r.update_idletasks()
-    bw = sum(x.winfo_reqwidth() for x in btns)  # width of the three buttons
+    widths = [x.winfo_reqwidth() for x in btns]   # close, maximize, minimize
+    bw = sum(widths)
     r._grips = []
 
     def size_from(code):
@@ -190,19 +195,31 @@ def frame(r, title, px, bg, icon, fg="#cfd8dc"):
         except Exception:
             pass
 
-    def grip(cursor, code, **where):
+    def grip(cursor, code, over=None, **where):
         g = tk.Frame(r, bg=bg, cursor=cursor)
         g.place(**where)
         g._code, g._where = code, where
         g.bind("<Button-1>", lambda e: size_from(code))
         r._grips.append(g)
+        if over is not None:
+            over._grips.append(g)
+        return g
 
     # left edge and top left corner
     grip("size_we", 1, x=0, y=c, width=b, relheight=1, height=-2 * c)
     grip("size_nw_se", 4, x=0, y=0, width=c, height=c)
-    # top edge, stops before the buttons
+    # top edge: up to the buttons, then a strip along the top of each one
+    # (the X's stops where the top right corner starts)
     grip("size_ns", 3, x=c, y=0, relwidth=1, width=-(c + bw), height=b)
-    # right edge, starts below the title bar
+    right_of = 0
+    for btn, w in zip(btns, widths):
+        span = w - c if btn is closebtn else w
+        grip("size_ns", 3, over=btn, relx=1, x=-(right_of + w), y=0,
+             width=span, height=b)
+        right_of += w
+    # right edge: down the X's outer side, then the rest of the window
+    grip("size_we", 2, over=closebtn, relx=1, x=-b, y=c, width=b,
+         height=bh - c)
     grip("size_we", 2, relx=1, x=-b, y=bh, width=b, relheight=1,
          height=-(bh + c))
     # bottom edge and bottom corners
@@ -212,9 +229,8 @@ def frame(r, title, px, bg, icon, fg="#cfd8dc"):
     # top right corner: a thin L over the close button's outer edge, so the
     # X stays clickable but the corner resizes like the other three
     # (Stargatecraft found it missing, PR #6)
-    grip("size_ne_sw", 5, relx=1, x=-c, y=0, width=c, height=b)
-    grip("size_ne_sw", 5, relx=1, x=-b, y=0, width=b, height=c)
-    corner.extend(r._grips[-2:])
+    grip("size_ne_sw", 5, over=closebtn, relx=1, x=-c, y=0, width=c, height=b)
+    grip("size_ne_sw", 5, over=closebtn, relx=1, x=-b, y=0, width=b, height=c)
 
     # Maximized, nothing resizes, and the grips would only steal clicks from
     # the buttons' outer edge: at the screen corner that is where the

@@ -662,6 +662,83 @@ class TestWindowsBuild(unittest.TestCase):
         self.assertEqual(seen["short"]["squashed"], [])
         self.assertEqual(seen["tall"]["upload"], seen["short"]["upload"])
 
+    def test_edges_resize_on_one_axis_and_reach_past_the_buttons(self):
+        """Each edge is a one-axis grip with its own cursor, including the
+        strip above the title bar's buttons and the X's right side, where
+        there was none (Stargatecraft, PR #6). The buttons still click
+        below the strip, and a hovered X tints every grip over it."""
+        import tkinter as tk_
+        from debrief_uploader import winframe
+        real_frame = tk_.Frame
+        if os.name != "nt":
+            # the size_* cursors exist only in Windows Tk; elsewhere test
+            # the layout with a stand-in cursor and remember the real one
+            class Frame(real_frame):
+                def __init__(self, *a, **kw):
+                    want = kw.get("cursor", "")
+                    if want.startswith("size_"):
+                        kw["cursor"] = "crosshair"
+                    real_frame.__init__(self, *a, **kw)
+                    self.want = want
+            tk_.Frame = Frame
+        seen = {}
+        try:
+            r = tk_.Tk()
+            r.geometry("520x420+40+40")
+            winframe.frame(r, "t", self.ui._px, self.ui.BG,
+                           self.ui._res("app.ico"))
+            self.ui._Body(r)
+
+            def probe():
+                try:
+                    for g in r._grips:
+                        g.lift()
+                    W, H = r.winfo_width(), r.winfo_height()
+
+                    def at(x, y):
+                        w = r.winfo_containing(r.winfo_rootx() + x,
+                                               r.winfo_rooty() + y)
+                        cur = getattr(w, "want", None) or (
+                            w.cget("cursor") if w is not None else None)
+                        return getattr(w, "_code", None), cur, w
+                    px = self.ui._px
+                    for name, xy in {"left": (1, H // 2),
+                                     "right": (W - 2, H // 2),
+                                     "top": (W // 3, 1),
+                                     "bottom": (W // 2, H - 2),
+                                     "beside the X": (W - 2, px(20))}.items():
+                        seen[name] = at(*xy)[:2]
+                    bar = r.winfo_children()[0]
+                    for b in bar.winfo_children():
+                        if isinstance(b, tk_.Label) and b.cget("text") in (
+                                winframe.CLOSE, winframe.MAXIMIZE,
+                                winframe.MINIMIZE):
+                            mid = b.winfo_rootx() - r.winfo_rootx() + b.winfo_width() // 2
+                            seen["above " + b.cget("text")] = at(mid, 1)[:2]
+                            seen["on " + b.cget("text")] = at(mid, px(16))[2] is b
+                            if b.cget("text") == winframe.CLOSE:
+                                b.event_generate("<Enter>")
+                                seen["hover"] = ({g.cget("bg") for g in b._grips},
+                                                 b.cget("bg"), len(b._grips))
+                                b.event_generate("<Leave>")
+                finally:
+                    r.destroy()
+            r.after(500, probe)
+            r.mainloop()
+        finally:
+            tk_.Frame = real_frame
+        self.assertEqual(seen["left"], (1, "size_we"))
+        self.assertEqual(seen["right"], (2, "size_we"))
+        self.assertEqual(seen["beside the X"], (2, "size_we"))
+        self.assertEqual(seen["top"], (3, "size_ns"))
+        self.assertEqual(seen["bottom"], (6, "size_ns"))
+        for g in (winframe.CLOSE, winframe.MAXIMIZE, winframe.MINIMIZE):
+            self.assertEqual(seen["above " + g], (3, "size_ns"), g)
+            self.assertTrue(seen["on " + g], g)
+        tints, x_bg, n = seen["hover"]
+        self.assertEqual(tints, {x_bg})
+        self.assertEqual(n, 4)       # top strip, right side, the corner's L
+
     def test_review_window_title_matches_its_contents(self):
         """It used to say "needs you" over a window saying nothing needs you."""
         titles = []
