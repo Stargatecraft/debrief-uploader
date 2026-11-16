@@ -163,7 +163,7 @@ icon should appear in the tray on its own.
 | | |
 |---|---|
 | **Sign in...** | shown until you are signed in; nothing uploads before then |
-| **Review (n)** | resolve anything it would not guess at |
+| **Review (n)** | battles waiting for your Upload: review mode, or from before it was running |
 | **Status...** | what it has seen and uploaded, with links |
 | **Settings...** | account, folders, visibility, battle types, review mode, scan limits, start-at-logon |
 | **Why isn't it uploading?** | the full diagnosis, same as `Debrief.cmd doctor` |
@@ -265,7 +265,7 @@ Use `Debrief.cmd <command>`, or `python -m debrief_uploader <command>`:
 
 ```
 python -m debrief_uploader status     what it has seen and uploaded
-python -m debrief_uploader review     resolve anything it wasn't sure about
+python -m debrief_uploader review     upload or skip the battles waiting for you
 python -m debrief_uploader run        watch and upload (add --tray for the tray icon)
 python -m debrief_uploader setup      show or set the folders it watches
                                       (--exclude-dir to never read a folder,
@@ -303,7 +303,8 @@ old; only the scorecard-checked figures are missing.
    [Late screenshots](#late-screenshots)).
 4. Uploads the replay and its scorecards, then shows you the link.
 
-Training-room battles upload straight away — they have no scorecard screens.
+Training-room battles upload straight away, since they have no scorecard
+screens (with review mode on, they wait for you like every other battle).
 
 A battle you took no scorecards for uploads anyway once the replay is at least
 15 minutes old. You still get the full debrief; only the scorecard-checked
@@ -314,11 +315,18 @@ instead, set `"upload_without_scorecards": false` in `settings.json`.
 
 ## When it asks you something
 
-It will not guess. If you skip a battle's screenshots, the next battle's
-scorecards become genuinely ambiguous — the results screen for a battle you
-left early can appear *after* the next battle has already finished. When that
-happens it holds the upload and asks, rather than attaching your scorecards to
-the wrong battle.
+Only when you asked it to. Screenshots always go to a battle on their own:
+the battle whose time is printed on them, or else the battle that finished
+last before you took them. If you left a battle early and only screenshot its
+results after your next battle, the printed battle time sends them to the
+right one. If that time cannot be read, the site sees that the players on the
+scorecard are another battle's, leaves the scorecard out of that battle's
+figures and tells you on its replay page.
+
+With **review mode** on (**Settings -> Ask me before every upload**), every
+battle waits for you before it uploads: with screenshots or without, and
+training rooms too. A battle that finished while the uploader was not running
+always waits for you.
 
 `python -m debrief_uploader review` clears the queue, or use **Review** in the
 tray menu.
@@ -343,8 +351,8 @@ the same window forward.
   days. File names and battle info only — no tokens, no images.
 - **Settings**: `settings.json` next to the logs. Timings, folders, visibility
   for new uploads, and `review_mode` (hold everything for confirmation,
-  including battles with no scorecards — worth turning on for your first
-  session).
+  including battles with no scorecards and training rooms; worth turning on
+  for your first session).
 
 ### Keeping folders private
 

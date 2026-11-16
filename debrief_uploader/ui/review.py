@@ -452,7 +452,8 @@ def _review_title(held):
 
 
 def open_review(app, on_change=None):
-    """Resolve the battles the matcher would not guess at.
+    """The battles waiting for the user's Upload (review mode, or from
+    before the app was running).
 
     The title is derived from the CONTENT, not assumed. It used to read
     "needs you" over a window saying "Nothing needs you." -- which is the sort

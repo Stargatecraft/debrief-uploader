@@ -17,6 +17,7 @@ from .matcher import (AWAITING_SHOTS, Cluster, FILTERED, HELD, NEW, ORPHAN,
 CHOSEN_NOTE = "screenshots chosen by you"
 CHOSEN_NONE_NOTE = "no screenshots - your choice"
 LATE_NOTE = "screenshots found after upload - adding them"
+LATE_ASK = "already uploaded - add these screenshots to it? (%s)"
 LATE_GIVE_UP = 5          # attempts before late screenshots stop retrying
 
 
@@ -57,44 +58,41 @@ class Engine:
         self._recheck_held()
 
     def _recheck_held(self):
-        """Release holds that only existed because of the older rule.
+        """Settle the questions older builds asked about pairing.
 
-        Until v1.0.7 any unpaired earlier battle blocked a match, whether or
-        not its results could still have been on screen -- so one battle a
-        player never screenshotted held up every battle after it, and the
-        count only grew. Those holds were wrong, and clearing them by hand is
-        not the user's job.
+        Before 1.9 a battle was held when an earlier battle's results could
+        still have been on screen, or when only one tab was captured, and the
+        user had to say which battle the screenshots were of. Pairing no
+        longer asks (Greg, 2026-11-16), so on start those are settled the way
+        the matcher settles them now: the battle keeps the screenshots it was
+        given. With review mode on it stays held for the user's Upload, like
+        any other upload; otherwise it is queued.
 
-        Only ambiguity holds are re-examined. A backfill hold ("found before
-        the app was running") is held for a different and still-valid reason
-        and is left alone.
+        Nothing else is touched: a hold from before the app was running, a
+        review-mode hold and one whose screenshots the user picked by hand
+        each wait for the user for a reason that still stands.
         """
         released = 0
+        review = self.s.get("review_mode")
         for row in self.store.replays([HELD]):
-            # Only the ambiguity hold. A review-mode hold ("ask me before
-            # every upload") or one whose screenshots the user picked by hand
-            # has two screenshots and no rival too, and releasing it would
-            # upload it on the next start without the user pressing Upload.
-            if row["backfill"] or not (row["note"] or "").startswith(
-                    matcher.AMBIGUOUS_REASON):
+            note = row["note"] or ""
+            late = bool(row["late_shots"])
+            if late:
+                asked = note == LATE_ASK % matcher.ONE_TAB_REASON
+            else:
+                asked = (note == matcher.ONE_TAB_REASON
+                         or note.startswith(matcher.AMBIGUOUS_REASON))
+            if row["backfill"] or not asked or not self.store.shots_for(row["md5"]):
                 continue
-            shots = self.store.shots_for(row["md5"])
-            if len(shots) < 2:
+            if review:
+                self.store.update_replay(
+                    row["md5"], note=LATE_ASK % matcher.REVIEW_REASON if late
+                    else matcher.REVIEW_REASON)
                 continue
-            t0 = min(s["t"] for s in shots)
-            rec = _rec(row)
-            rivals = [
-                _rec(o) for o in self.store.replays(list(matcher.REVIEWABLE))
-                if o["md5"] != row["md5"] and (o["t_close"] or 0) < rec.t_close
-                and t0 - (o["t_close"] or 0) <= self.s["max_lag"]
-            ]
-            rivals = [r for r in rivals
-                      if not r.is_training
-                      and matcher.could_still_be_showing(r, t0, self.s)]
-            if rivals:
-                continue
-            self.store.update_replay(row["md5"], state=READY, note=None)
-            self.log.info("no longer ambiguous, queuing %s" % self._label(row))
+            self.store.update_replay(row["md5"], state=READY,
+                                     note=LATE_NOTE if late else None)
+            self.log.info("no longer asking which battle its screenshots are "
+                          "of, queuing %s" % self._label(row))
             released += 1
         return released
 
@@ -316,13 +314,20 @@ class Engine:
             training = group == matcher.TRAINING
             if self._filter_battle_type(r, meta, group):
                 continue
-            self.store.update_replay(
-                r["md5"], state=self._state_after_meta(r, training),
-                **self._meta_fields(meta, group))
+            state = self._state_after_meta(r, training)
+            fields = self._meta_fields(meta, group)
+            review_hold = state == HELD and not r["backfill"]
+            if review_hold:
+                fields["note"] = matcher.REVIEW_REASON
+            self.store.update_replay(r["md5"], state=state, **fields)
             self._check_skew(_rec(self.store.replay(r["md5"])))
+            say = ""
+            if training:
+                say = " (training room - no scorecards needed%s)" % (
+                    "; waiting for you, review mode is on" if review_hold else "")
             self.log.info("%s: %s on %s%s" % (
                 r["filename"], meta.get("playerVehicle"), meta.get("mapName"),
-                " (training room - no scorecards needed)" if training else ""))
+                say))
         return len(rows)
 
     @staticmethod
@@ -384,14 +389,17 @@ class Engine:
 
     def _state_after_meta(self, row, training):
         """A training room has no scorecard screens at all, so it never waits
-        for any -- it is ready the moment we know what it is. Anything found
-        before the app was running is pairable but never auto-uploaded: the
-        file times are still trustworthy, the user's memory of that session
-        is not.
+        for any -- it is ready the moment we know what it is, unless review
+        mode is on: "Ask me before every upload" covers training rooms too
+        (Greg, 2026-11-16). Anything found before the app was running is
+        pairable but never auto-uploaded: the file times are still
+        trustworthy, the user's memory of that session is not.
         """
-        if row["backfill"]:
-            return HELD if training else AWAITING_SHOTS
-        return READY if training else AWAITING_SHOTS
+        if not training:
+            return AWAITING_SHOTS
+        if row["backfill"] or self.s.get("review_mode"):
+            return HELD
+        return READY
 
     def _check_skew(self, rec):
         sk = matcher.clock_skew(rec)
@@ -496,8 +504,7 @@ class Engine:
             self.store.update_replay(
                 d.replay.key, state=READY if late else HELD, late_shots=1,
                 attempts=0, next_try=0,
-                note=LATE_NOTE if late else
-                "already uploaded - add these screenshots to it? (%s)" % d.reason)
+                note=LATE_NOTE if late else LATE_ASK % d.reason)
             self.log.info("%d screenshot(s) of %s, which is already uploaded: %s"
                           % (len(paths), self._label(row),
                              "adding them to it" if late
@@ -521,10 +528,7 @@ class Engine:
         elif d.kind == matcher.HOLD:
             if d.replay:
                 self.store.attach_shots(paths, d.replay.key)
-                alts = ", ".join(self._label(live[a.key]) for a in d.alternatives)
-                self.store.update_replay(
-                    d.replay.key, state=HELD,
-                    note=d.reason + (" (or: %s)" % alts if alts else ""))
+                self.store.update_replay(d.replay.key, state=HELD, note=d.reason)
                 self.log.warn("needs you: %s - %s. Nothing uploads for "
                               "this battle until you run "
                               "'Debrief.cmd review'"

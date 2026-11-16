@@ -297,6 +297,60 @@ class TestEngineMatching(EngineCase):
         self.assertEqual(self.client.rows["rid-1"]["shots"], [])
         self.assertEqual(self.client.rows["rid-1"]["meta"].get("no_scorecard_reason"), "training_room")
 
+    def test_scorecards_after_a_training_room_go_to_no_battle(self):
+        """A training room has no scorecards, so screenshots after one are
+        not the earlier battle's either. The matcher said so, but a training
+        room is queued the moment it is identified, never waiting, so the
+        rule never applied and they went to the earlier battle."""
+        groups = {}
+        base = self.client.meta
+
+        def replay_meta(raw):
+            self.client.calls.append("meta")
+            return dict(base, matchGroup=groups.get(raw, base["matchGroup"]))
+        self.client.replay_meta = replay_meta
+        now = time.time()
+        self.make_replay("2026_A.wowsreplay", mtime=now - 600)   # no scorecards
+        p = self.make_replay("2026_T.wowsreplay", mtime=now - 300)
+        with open(p, "rb") as f:
+            groups[f.read()] = "training_room"
+        self.make_shot("after_t_a.png", mtime=now - 260)
+        self.make_shot("after_t_b.png", mtime=now - 253)
+        for _ in range(6):
+            self.eng.tick()
+        rows = {r["filename"]: r for r in self.store.replays()}
+        a, t = rows["2026_A.wowsreplay"], rows["2026_T.wowsreplay"]
+        self.assertEqual(t["state"], matcher.UPLOADED)
+        self.assertEqual(a["state"], matcher.AWAITING_SHOTS)
+        self.assertEqual(self.store.shots_for(a["md5"]), [])
+        self.assertEqual(len(self.store.free_shots()), 2)
+
+    def test_review_mode_holds_a_training_room(self):
+        """'Ask me before every upload' covers training rooms too (Greg,
+        2026-11-16). Having no scorecards to wait for, they used to upload
+        at once even in review mode."""
+        self.s["review_mode"] = True
+        self.client.meta = dict(self.client.meta, matchGroup="training_room")
+        self.make_replay("t.wowsreplay", mtime=time.time() - 100)
+        for _ in range(4):
+            self.eng.tick()
+        row = self.store.replays()[0]
+        self.assertEqual((row["state"], row["note"]),
+                         (matcher.HELD, matcher.REVIEW_REASON))
+        self.assertEqual(self.client.calls.count("raw"), 0)
+        self.eng.confirm(row["md5"])
+        for _ in range(2):
+            self.eng.tick()
+        self.assertEqual(self.store.replay(row["md5"])["state"], matcher.UPLOADED)
+
+    def test_training_room_without_review_mode_uploads_at_once(self):
+        """The positive control: the hold above is review mode's doing."""
+        self.client.meta = dict(self.client.meta, matchGroup="training_room")
+        self.make_replay("t.wowsreplay", mtime=time.time() - 100)
+        for _ in range(4):
+            self.eng.tick()
+        self.assertEqual(self.store.replays()[0]["state"], matcher.UPLOADED)
+
     def test_back_to_back_battles_each_get_their_own_shots(self):
         now = time.time()
         self.battle("A", now - 900)
@@ -309,33 +363,58 @@ class TestEngineMatching(EngineCase):
             self.assertEqual(len(self.store.shots_for(row["md5"])), 2, name)
         self.assertEqual(len(self.client.rows), 2)
 
-    def test_skipped_battle_is_held_not_guessed(self):
+    def test_skipped_battle_does_not_hold_up_the_next(self):
+        """Pairing never asks (Greg, 2026-11-16): B's scorecards go to B,
+        the battle just played, though A never got any."""
         now = time.time()
         # both under the 15-minute no-scorecard upload age: this is about the
-        # ambiguity, not about A eventually going up without scorecards
+        # pairing, not about A eventually going up without scorecards
         self.make_replay("2026_A.wowsreplay", mtime=now - 700)   # no shots
         self.battle("B", now - 400)
         for _ in range(6):
             self.eng.tick()
-        states = sorted(r["state"] for r in self.store.replays())
-        self.assertIn(matcher.HELD, states, "must ask rather than guess")
-        self.assertEqual(len(self.client.rows), 0, "nothing uploaded while unsure")
+        rows = {r["filename"]: r for r in self.store.replays()}
+        a, b = rows["2026_A.wowsreplay"], rows["2026_B.wowsreplay"]
+        self.assertEqual(b["state"], matcher.UPLOADED)
+        self.assertEqual(len(self.store.shots_for(b["md5"])), 2)
+        self.assertEqual(a["state"], matcher.AWAITING_SHOTS)
+        self.assertEqual(self.client.calls.count("raw"), 1, "only B went up")
+
+    def test_review_mode_holds_the_paired_battle(self):
+        self.s["review_mode"] = True
+        now = time.time()
+        self.make_replay("2026_A.wowsreplay", mtime=now - 700)   # no shots
+        self.battle("B", now - 400)
+        for _ in range(6):
+            self.eng.tick()
+        b = next(r for r in self.store.replays()
+                 if r["filename"] == "2026_B.wowsreplay")
+        self.assertEqual((b["state"], b["note"]),
+                         (matcher.HELD, matcher.REVIEW_REASON))
+        self.assertEqual(len(self.store.shots_for(b["md5"])), 2,
+                         "held with its screenshots already paired")
+        self.assertEqual(self.client.calls.count("raw"), 0)
 
     def test_confirming_a_held_item_uploads_it(self):
+        self.s["review_mode"] = True
         now = time.time()
         self.make_replay("2026_A.wowsreplay", mtime=now - 900)
         self.battle("B", now - 600)
         for _ in range(6):
             self.eng.tick()
-        held = [r for r in self.store.replays() if r["state"] == matcher.HELD]
-        self.assertEqual(len(held), 1)
-        self.eng.confirm(held[0]["md5"])
+        rows = {r["filename"]: r for r in self.store.replays()}
+        a, b = rows["2026_A.wowsreplay"], rows["2026_B.wowsreplay"]
+        self.assertEqual((a["state"], b["state"]), (matcher.HELD, matcher.HELD),
+                         "A: no scorecards, B: paired; both wait for Upload")
+        self.eng.confirm(b["md5"])
         for _ in range(3):
             self.eng.tick()
-        self.assertEqual(self.store.replay(held[0]["md5"])["state"],
-                         matcher.UPLOADED)
+        self.assertEqual(self.store.replay(b["md5"])["state"], matcher.UPLOADED)
+        self.assertEqual(self.store.replay(a["md5"])["state"], matcher.HELD)
+        self.assertEqual(self.client.calls.count("raw"), 1)
 
     def test_reassigning_moves_the_shots(self):
+        self.s["review_mode"] = True
         now = time.time()
         self.make_replay("2026_A.wowsreplay", mtime=now - 900)
         self.battle("B", now - 600)
@@ -350,6 +429,7 @@ class TestEngineMatching(EngineCase):
     def test_reassigning_holds_the_receiver_instead_of_uploading_it(self):
         """Stargatecraft, PR #6: giving screenshots to another card uploaded
         that battle at once. Moving them is a correction, not a send."""
+        self.s["review_mode"] = True
         now = time.time()
         self.make_replay("2026_A.wowsreplay", mtime=now - 900)
         self.battle("B", now - 600)
@@ -602,6 +682,7 @@ class TestDiagnostics(EngineCase):
         self.assertIn("uploaded", lines)
 
     def test_diagnose_reports_a_held_item(self):
+        self.s["review_mode"] = True
         now = time.time()
         self.make_replay("2026_A.wowsreplay", mtime=now - 900)
         self.battle("B", now - 600)
@@ -742,6 +823,7 @@ class TestDoctorTellsYouWhatToDo(EngineCase):
     """
 
     def test_held_items_name_the_review_command(self):
+        self.s["review_mode"] = True
         now = time.time()
         self.make_replay("2026_A.wowsreplay", mtime=now - 900)
         self.battle("B", now - 600)
@@ -754,6 +836,7 @@ class TestDoctorTellsYouWhatToDo(EngineCase):
                       text.replace("\n", " "))
 
     def test_log_says_how_to_clear_a_hold(self):
+        self.s["review_mode"] = True
         now = time.time()
         self.make_replay("2026_A.wowsreplay", mtime=now - 900)
         self.battle("B", now - 600)
@@ -781,11 +864,12 @@ class TestDoctorTellsYouWhatToDo(EngineCase):
 
 
 class TestHoldsAreRecheckedOnStart(EngineCase):
-    """Holds created by the older, over-eager rule are released on start.
-
-    Clearing up after a bug I shipped is not the user's job -- but a hold that
-    is still genuinely ambiguous must survive, and a backfill hold is held for
-    an entirely different reason and must not be touched.
+    """Builds before 1.9 asked which battle a set of screenshots belonged to
+    (an earlier battle that could still have been showing its results, or
+    one tab only). Pairing no longer asks (Greg, 2026-11-16), so on start
+    those questions are settled the way the matcher settles them now: the
+    battle keeps the screenshots it was given. Every other hold waits for
+    the user for a reason that still stands and is left alone.
 
     These set the database up directly: going through a full tick to reach a
     specific hold shape makes the assertions vague, and a test that cannot
@@ -793,7 +877,7 @@ class TestHoldsAreRecheckedOnStart(EngineCase):
     """
 
     def _replay(self, md5, close_ago, started_ago, duration=900, state=None,
-                backfill=0, note=None):
+                backfill=0, note=None, **extra):
         now = time.time()
         self.store.add_replay(md5=md5, filename=md5 + ".wowsreplay",
                               staged_path="/staged/" + md5,
@@ -803,10 +887,12 @@ class TestHoldsAreRecheckedOnStart(EngineCase):
                               player_ship="PJSC008-Myoko", map_name="52_Britain",
                               state=state or matcher.AWAITING_SHOTS,
                               backfill=backfill, note=note)
+        if extra:
+            self.store.update_replay(md5, **extra)
 
-    def _shots_on(self, md5, ago_min):
+    def _shots_on(self, md5, ago_min, n=2):
         now = time.time()
-        for i in (1, 2):
+        for i in range(1, n + 1):
             p = "/shots/%s-%d.png" % (md5, i)
             self.store.add_shot(p, now - ago_min * 60 + i)
             self.store.attach_shots([p], md5)
@@ -815,80 +901,184 @@ class TestHoldsAreRecheckedOnStart(EngineCase):
         from debrief_uploader.engine import Engine
         return Engine(self.s, self.store, self.client, self.log)
 
-    def test_the_reported_backlog_is_released(self):
-        # A: started 30 min ago, 15-min limit -> ended by minute 15 at the
-        # latest, i.e. 15 min before the screenshots. Not a rival.
-        self._replay("A", close_ago=18, started_ago=30)
-        self._replay("B", close_ago=1, started_ago=14, state=matcher.HELD,
-                     note="an earlier battle is still missing its scorecards")
-        self._shots_on("B", ago_min=0)
-        self._boot()
-        self.assertEqual(self.store.replay("B")["state"], matcher.READY,
-                         "an older battle that had long since ended must not "
-                         "hold this up")
-        self.assertIsNone(self.store.replay("B")["note"])
+    AMBIGUOUS = matcher.AMBIGUOUS_REASON + " (or: Myoko / Crash Zone)"
 
-    def test_a_real_ambiguity_survives(self):
-        # A started 16 min ago and was left after 1 minute, but its 15-minute
-        # battle ran on until minute 16 -- so its results appeared AFTER B
-        # closed. That is the case the hold exists for.
+    def test_an_ambiguity_hold_is_queued(self):
+        # A was left after 1 minute of a battle that ran on past B's close:
+        # exactly the case the old rule asked about
         self._replay("A", close_ago=15, started_ago=16)
         self._replay("B", close_ago=2, started_ago=13, state=matcher.HELD,
-                     note="an earlier battle is still missing its scorecards")
+                     note=self.AMBIGUOUS)
         self._shots_on("B", ago_min=0)
         self._boot()
-        self.assertEqual(self.store.replay("B")["state"], matcher.HELD,
-                         "a battle whose results could still be on screen is "
-                         "a genuine rival")
+        self.assertEqual(self.store.replay("B")["state"], matcher.READY)
+        self.assertIsNone(self.store.replay("B")["note"])
+        self.assertEqual(len(self.store.shots_for("B")), 2)
+        self.assertEqual(self.store.replay("A")["state"], matcher.AWAITING_SHOTS)
+
+    def test_an_ambiguity_with_a_missing_timestamp_is_queued_too(self):
+        self._replay("A", close_ago=18, started_ago=30, duration=None)
+        self._replay("B", close_ago=1, started_ago=14, state=matcher.HELD,
+                     note=self.AMBIGUOUS)
+        self._shots_on("B", ago_min=0)
+        self._boot()
+        self.assertEqual(self.store.replay("B")["state"], matcher.READY)
+
+    def test_a_one_tab_hold_is_queued(self):
+        self._replay("B", close_ago=1, started_ago=14, state=matcher.HELD,
+                     note=matcher.ONE_TAB_REASON)
+        self._shots_on("B", ago_min=0, n=1)
+        self._boot()
+        self.assertEqual(self.store.replay("B")["state"], matcher.READY)
+
+    def test_one_tab_for_a_battle_already_on_the_site_is_added(self):
+        self._replay("U", close_ago=30, started_ago=45, state=matcher.HELD,
+                     note=engine.LATE_ASK % matcher.ONE_TAB_REASON,
+                     remote_id="rid-9", short_code="code9", late_shots=1)
+        self._shots_on("U", ago_min=5, n=1)
+        self._boot()
+        row = self.store.replay("U")
+        self.assertEqual((row["state"], row["note"], row["late_shots"]),
+                         (matcher.READY, engine.LATE_NOTE, 1),
+                         "queued as late screenshots, not as a new upload")
+
+    def test_review_mode_keeps_them_held_and_says_why(self):
+        self.s["review_mode"] = True
+        self._replay("A", close_ago=15, started_ago=16)
+        self._replay("B", close_ago=2, started_ago=13, state=matcher.HELD,
+                     note=self.AMBIGUOUS)
+        self._shots_on("B", ago_min=0)
+        self._replay("C", close_ago=1, started_ago=12, state=matcher.HELD,
+                     note=matcher.ONE_TAB_REASON)
+        self._shots_on("C", ago_min=0, n=1)
+        self._replay("U", close_ago=30, started_ago=45, state=matcher.HELD,
+                     note=engine.LATE_ASK % matcher.ONE_TAB_REASON,
+                     remote_id="rid-9", short_code="code9", late_shots=1)
+        self._shots_on("U", ago_min=5, n=1)
+        eng = self._boot()
+        for md5, note in (("B", matcher.REVIEW_REASON),
+                          ("C", matcher.REVIEW_REASON),
+                          ("U", engine.LATE_ASK % matcher.REVIEW_REASON)):
+            row = self.store.replay(md5)
+            self.assertEqual((row["state"], row["note"]), (matcher.HELD, note), md5)
+        for _ in range(3):
+            eng.process_queue()
+        self.assertEqual(self.client.calls, [], "nothing goes up unasked")
 
     def test_backfill_holds_are_left_alone(self):
         self._replay("Z", close_ago=90, started_ago=105, state=matcher.HELD,
-                     backfill=1, note="found before the app was running")
+                     backfill=1, note=self.AMBIGUOUS)
         self._shots_on("Z", ago_min=88)
         self._boot()
         self.assertEqual(self.store.replay("Z")["state"], matcher.HELD,
-                         "a backfill hold is not an ambiguity hold")
+                         "a battle from before the app was running is never "
+                         "sent unasked")
 
     def test_a_hold_without_screenshots_is_not_released(self):
-        self._replay("A", close_ago=40, started_ago=55)
-        self._replay("B", close_ago=1, started_ago=14, state=matcher.HELD)
+        self._replay("B", close_ago=1, started_ago=14, state=matcher.HELD,
+                     note=self.AMBIGUOUS)
         self._boot()
         self.assertEqual(self.store.replay("B")["state"], matcher.HELD,
                          "nothing to upload, so nothing to release")
 
-    def test_unknown_duration_keeps_the_hold(self):
-        self._replay("A", close_ago=18, started_ago=30, duration=None)
-        self._replay("B", close_ago=1, started_ago=14, state=matcher.HELD,
-                     note="an earlier battle is still missing its scorecards")
-        self._shots_on("B", ago_min=0)
+    def test_other_holds_are_not_released(self):
+        """'Ask me before every upload' must survive a restart (the recheck
+        once released every non-backfill hold with two screenshots), and so
+        must a choice the user made."""
+        for md5, note in (("R", matcher.REVIEW_REASON),
+                          ("H", engine.Engine.CHOSEN_NOTE),
+                          ("M", engine.Engine.MOVED_NOTE),
+                          ("N", "no scorecards were taken - upload it anyway?")):
+            self._replay(md5, close_ago=1, started_ago=14, state=matcher.HELD,
+                         note=note)
+            self._shots_on(md5, ago_min=0)
         self._boot()
-        self.assertEqual(self.store.replay("B")["state"], matcher.HELD,
-                         "never resolve an ambiguity from a missing timestamp")
+        for md5 in "RHMN":
+            self.assertEqual(self.store.replay(md5)["state"], matcher.HELD, md5)
 
     def test_release_is_logged(self):
-        self._replay("A", close_ago=18, started_ago=30)
         self._replay("B", close_ago=1, started_ago=14, state=matcher.HELD,
-                     note="an earlier battle is still missing its scorecards")
+                     note=self.AMBIGUOUS)
         self._shots_on("B", ago_min=0)
         self._boot()
-        self.assertTrue(any("no longer ambiguous" in l for l in self.log.lines))
+        self.assertTrue(any("no longer asking" in l for l in self.log.lines))
 
 
-    def test_review_mode_hold_is_not_released_on_start(self):
-        """'Ask me before every upload' must survive a restart: the recheck
-        used to release every non-backfill hold with two screenshots."""
-        self._replay("B", close_ago=1, started_ago=14, state=matcher.HELD,
-                     note="review mode is on")
-        self._shots_on("B", ago_min=0)
-        self._boot()
-        self.assertEqual(self.store.replay("B")["state"], matcher.HELD)
+class TestReviewModeHoldsEveryUpload(EngineCase):
+    """A tester's report (2026-11-16, on a 1.3 build): with review mode on,
+    the battles they took screenshots of waited for them, and the ones they
+    did not uploaded by themselves 15 minutes later. "Ask me before every
+    upload" means every upload: with screenshots or without, one tab, a
+    training room, and across a restart."""
 
-    def test_hand_picked_hold_is_not_released_on_start(self):
-        self._replay("B", close_ago=1, started_ago=14, state=matcher.HELD,
-                     note=engine.Engine.CHOSEN_NOTE)
-        self._shots_on("B", ago_min=0)
-        self._boot()
-        self.assertEqual(self.store.replay("B")["state"], matcher.HELD)
+    def setUp(self):
+        super().setUp()
+        self.s["review_mode"] = True
+        self.groups = {}            # replay bytes -> matchGroup
+        base = self.client.meta
+
+        def replay_meta(raw):
+            self.client.calls.append("meta")
+            return dict(base, matchGroup=self.groups.get(raw, base["matchGroup"]))
+        self.client.replay_meta = replay_meta
+
+    def _restart(self):
+        self.eng = engine.Engine(self.s, self.store, self.client, self.log)
+        self.eng._watch_start = lambda path: 0
+        self.eng.read_screen_headers = lambda paths: {}
+
+    def test_a_session_uploads_nothing_until_the_user_says(self):
+        now = time.time()
+        self.battle("A", now - 3600, with_shots=False)     # no scorecards
+        self.battle("B", now - 3000)                       # both tabs
+        p = self.make_replay("2026_C.wowsreplay", mtime=now - 2400)
+        with open(p, "rb") as f:
+            self.groups[f.read()] = "training_room"
+        self.battle("D", now - 1800, with_shots=False)
+        self.make_shot("shot_D_a.png", mtime=now - 1800 + 40)   # one tab
+        self.battle("E", now - 1200, with_shots=False)     # no scorecards
+        for _ in range(10):
+            self.eng.tick(now)
+        self._restart()
+        for _ in range(10):
+            self.eng.tick(now + 3 * 3600)           # long past every timeout
+        rows = {r["filename"][5:6]: r for r in self.store.replays()}
+        self.assertEqual(sorted(rows), list("ABCDE"))
+        self.assertEqual({r["state"] for r in rows.values()}, {matcher.HELD})
+        self.assertEqual(self.client.calls.count("raw"), 0)
+        self.assertEqual(self.client.rows, {})
+        self.assertEqual(len(self.store.shots_for(rows["B"]["md5"])), 2)
+        self.assertEqual(len(self.store.shots_for(rows["D"]["md5"])), 1,
+                         "one tab is paired, not asked about")
+        for k in "BCD":
+            self.assertEqual(rows[k]["note"], matcher.REVIEW_REASON, k)
+
+        self.eng.confirm(rows["E"]["md5"])
+        for _ in range(3):
+            self.eng.tick(now + 3 * 3600)
+        self.assertEqual(self.store.replay(rows["E"]["md5"])["state"],
+                         matcher.UPLOADED)
+        self.assertEqual(self.client.calls.count("raw"), 1,
+                         "only the battle the user approved")
+
+    def test_positive_control_without_review_mode(self):
+        """The same session with review mode off uploads all five, so the
+        holds above are review mode's doing."""
+        self.s["review_mode"] = False
+        now = time.time()
+        self.battle("A", now - 3600, with_shots=False)
+        self.battle("B", now - 3000)
+        p = self.make_replay("2026_C.wowsreplay", mtime=now - 2400)
+        with open(p, "rb") as f:
+            self.groups[f.read()] = "training_room"
+        self.battle("D", now - 1800, with_shots=False)
+        self.make_shot("shot_D_a.png", mtime=now - 1800 + 40)
+        self.battle("E", now - 1200, with_shots=False)
+        for _ in range(20):
+            self.eng.tick(now + 3 * 3600)
+        self.assertEqual({r["state"] for r in self.store.replays()},
+                         {matcher.UPLOADED})
+        self.assertEqual(self.client.calls.count("raw"), 5)
 
 
 class TestShotGroups(EngineCase):

@@ -29,10 +29,6 @@ DEFAULTS = {
     "max_shots": 4,         # upload at most this many screenshots per replay
     "grace": 60,            # replay may close this soon AFTER the first shot
     "max_lag": 25 * 60,     # oldest a replay may be relative to its shots
-    # How long after a battle's results could appear they might still be on
-    # screen. Used to decide whether an older un-scorecarded battle is a real
-    # rival for a set of screenshots, or just old.
-    "results_grace": 300,
     # A replay with no scorecards stops waiting for them after this long (or
     # once enough later battles have closed) and, by default, uploads without
     # them. NEW NAMES (2026-09-26): Settings.save() writes every key, so older
@@ -69,7 +65,7 @@ DEFAULTS = {
     "min_upload_gap": 2.0,
     "max_uploads_per_hour": 20,
     # behaviour
-    "review_mode": False,   # hold every match for confirmation
+    "review_mode": False,   # hold every upload for confirmation
     "visibility": None,     # None = inherit the account's site default
     # Training rooms are practice against bots or a friend, not a result worth
     # putting in front of the community, and they carry no scorecard to anchor

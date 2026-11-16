@@ -12,8 +12,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from debrief_uploader.config import DEFAULTS
 from debrief_uploader.matcher import (
-    AUTO, HOLD, NONE, AWAITING_SHOTS, UPLOADED, ReplayRec, ShotRec,
-    cluster_shots, match_cluster, is_orphan, clock_skew, skew_is_sane,
+    AUTO, HOLD, NONE, AWAITING_SHOTS, REVIEW_REASON, UPLOADED, ReplayRec,
+    ShotRec, cluster_shots, match_cluster, is_orphan, clock_skew, skew_is_sane,
 )
 
 T0 = 1_756_000_000.0    # session start, arbitrary epoch
@@ -100,24 +100,23 @@ class TestSpecCases(unittest.TestCase):
         self.assertEqual(db.kind, AUTO)
         self.assertEqual(db.replay.key, "B")
 
-    def test_03_skipped_battle_holds(self):
-        # A never got screenshots; B's arrive. Nearest-preceding says B, and B
-        # is probably right -- but A is still unpaired, so ask.
+    def test_03_skipped_battle_does_not_hold_up_the_next(self):
+        # A never got screenshots; B's arrive. Nearest-preceding says B, and
+        # pairing never asks (Greg, 2026-11-16).
         a, b = replay("A", 10), replay("B", 25)
         d = match_cluster(one_cluster([25.5, 25.6]), [a, b], cfg())
-        self.assertEqual(d.kind, HOLD)
-        self.assertEqual(d.replay.key, "B")
-        self.assertEqual([x.key for x in d.alternatives], ["A"])
+        self.assertEqual((d.kind, d.replay.key), (AUTO, "B"))
 
-    def test_04_early_exit_never_silently_attaches(self):
-        # THE case. A closes 18s after starting (player left), B closes 12 min
-        # later, A's scorecards arrive after B has already closed.
+    def test_04_early_exit_goes_to_the_battle_just_played(self):
+        # The delayed-results trap. A closes 18s after starting (player
+        # left), B closes 12 min later, and shots come after B. By file time
+        # they go to B. If they are really A's, the battle time printed on
+        # them settles it first (test_screen_time), and the site sets aside
+        # a scorecard whose players are not B's.
         a = replay("A", 0.3)
         b = replay("B", 12)
         d = match_cluster(one_cluster([13, 13.1]), [a, b], cfg())
-        self.assertEqual(d.kind, HOLD, "early-exit shots must never auto-attach to B")
-        self.assertEqual(d.replay.key, "B")
-        self.assertIn("A", [x.key for x in d.alternatives])
+        self.assertEqual((d.kind, d.replay.key), (AUTO, "B"))
 
     def test_05_three_shots_all_upload(self):
         r = replay("A", 10)
@@ -126,11 +125,11 @@ class TestSpecCases(unittest.TestCase):
         self.assertEqual(d.kind, AUTO)
         self.assertEqual(len(c), 3)
 
-    def test_06_single_shot_holds(self):
+    def test_06_single_shot_pairs(self):
+        # one tab only: the site reads whichever tab it is given
         r = replay("A", 10)
         d = match_cluster(one_cluster([10.5]), [r], cfg())
-        self.assertEqual(d.kind, HOLD)
-        self.assertIn("one scorecard", d.reason)
+        self.assertEqual((d.kind, d.replay.key), (AUTO, "A"))
 
     def test_07_training_room_takes_no_shots(self):
         # A training room has no scorecard screens, so shots after one belong
@@ -207,7 +206,17 @@ class TestGuards(unittest.TestCase):
     def test_review_mode_holds_everything(self):
         r = replay("A", 10)
         d = match_cluster(one_cluster([10.5, 10.6]), [r], cfg(review_mode=True))
-        self.assertEqual(d.kind, HOLD)
+        self.assertEqual((d.kind, d.replay.key, d.reason),
+                         (HOLD, "A", REVIEW_REASON))
+        # one tab, and a skipped battle before it: paired all the same, and
+        # held only because review mode is on
+        d = match_cluster(one_cluster([10.5]), [r], cfg(review_mode=True))
+        self.assertEqual((d.kind, d.replay.key, d.reason),
+                         (HOLD, "A", REVIEW_REASON))
+        a, b = replay("A", 10), replay("B", 25)
+        d = match_cluster(one_cluster([25.5, 25.6]), [a, b], cfg(review_mode=True))
+        self.assertEqual((d.kind, d.replay.key, d.reason),
+                         (HOLD, "B", REVIEW_REASON))
 
     def test_no_replays_at_all(self):
         d = match_cluster(one_cluster([10, 10.1]), [], cfg())
@@ -286,17 +295,16 @@ class TestSettleWindow(unittest.TestCase):
         self.assertEqual(len(closed[0]), 3)
 
 
-class TestOlderBattleMustBePlausible(unittest.TestCase):
-    """A battle you never screenshotted must not block every battle after it.
+class TestOlderUnpairedBattlesNeverHoldUpAMatch(unittest.TestCase):
+    """A battle you never screenshotted must not hold up the ones after it.
 
-    Reported from a real machine: an 08:56 game that had ended by 09:11 at the
-    latest was still being treated as a rival claimant for 09:26 screenshots
-    that plainly belonged to the 09:12 game. One skipped battle poisoned the
-    whole session, and the held count only grew.
-
-    The guard is kept where it earns its place: an older battle whose results
-    could genuinely still be on screen (an early exit whose battle ran on) is
-    still a real ambiguity and is still held.
+    Reported from a real machine: an 08:56 game that had ended by 09:11 at
+    the latest was still being treated as a rival claimant for 09:26
+    screenshots that plainly belonged to the 09:12 game. Builds before 1.9
+    still asked when the older battle's results could genuinely have been on
+    screen (an early exit whose battle ran on); pairing no longer asks at
+    all (Greg, 2026-11-16), so every one of these goes to the battle just
+    played.
     """
 
     def battle(self, key, start_min, close_min, duration=900):
@@ -305,58 +313,37 @@ class TestOlderBattleMustBePlausible(unittest.TestCase):
                          state=AWAITING_SHOTS, match_group="pvp",
                          header_dt=T0 + start_min * 60, duration=duration)
 
-    def test_the_reported_case_now_uploads(self):
+    def assertGoesTo(self, key, replays, offsets):
+        d = match_cluster(one_cluster(offsets), replays, cfg())
+        self.assertEqual((d.kind, d.replay.key), (AUTO, key))
+
+    def test_the_reported_case(self):
         # A: starts 0, 15-min limit -> cannot run past minute 15
         # B: starts 16, closes 29;  screenshots at 30
-        a = self.battle("A", 0, 12)
-        b = self.battle("B", 16, 29)
-        d = match_cluster(one_cluster([30, 30.1]), [a, b], cfg())
-        self.assertEqual(d.kind, AUTO, "A ended 15 min before these were taken")
-        self.assertEqual(d.replay.key, "B")
+        self.assertGoesTo("B", [self.battle("A", 0, 12), self.battle("B", 16, 29)],
+                          [30, 30.1])
 
-    def test_early_exit_still_holds(self):
-        # A starts at 16 and the player leaves at 17 -- but A runs until 31,
-        # so its results appear AFTER B closed. That is the real ambiguity.
-        a = self.battle("A", 16, 17)
-        b = self.battle("B", 18, 29)
-        d = match_cluster(one_cluster([31, 31.1]), [a, b], cfg())
-        self.assertEqual(d.kind, HOLD)
-        self.assertIn("A", [x.key for x in d.alternatives])
+    def test_early_exit_whose_battle_ran_on(self):
+        # A starts at 16 and the player leaves at 17, but A runs until 31,
+        # so its results could appear after B closed
+        self.assertGoesTo("B", [self.battle("A", 16, 17), self.battle("B", 18, 29)],
+                          [31, 31.1])
 
-    def test_unknown_duration_stays_conservative(self):
+    def test_unknown_duration_or_skewed_clock(self):
         a = ReplayRec(key="A", t_close=T0 + 12 * 60, state=AWAITING_SHOTS,
                       match_group="pvp", header_dt=T0, duration=None)
-        b = self.battle("B", 16, 29)
-        d = match_cluster(one_cluster([30, 30.1]), [a, b], cfg())
-        self.assertEqual(d.kind, HOLD, "never guess from a missing timestamp")
-
-    def test_skewed_clock_stays_conservative(self):
-        # The -9h archive case: header_dt is on a different clock, so the
-        # elapsed-time subtraction is meaningless and must not be trusted.
+        self.assertGoesTo("B", [a, self.battle("B", 16, 29)], [30, 30.1])
+        # the -9h archive case: header_dt on a different clock
         a = ReplayRec(key="A", t_close=T0 + 12 * 60, state=AWAITING_SHOTS,
                       match_group="pvp", header_dt=T0 + 12 * 60 + 9 * 3600,
                       duration=900)
-        b = self.battle("B", 16, 29)
-        d = match_cluster(one_cluster([30, 30.1]), [a, b], cfg())
-        self.assertEqual(d.kind, HOLD)
-
-    def test_results_window_end_maths(self):
-        from debrief_uploader.matcher import results_window_end
-        # left 60s into a 900s battle -> 840s of battle still to run
-        r = ReplayRec(key="A", t_close=T0 + 60, header_dt=T0, duration=900)
-        self.assertEqual(results_window_end(r, 0), T0 + 60 + 840)
-        # played it out -> results are up at the close
-        r2 = ReplayRec(key="B", t_close=T0 + 900, header_dt=T0, duration=900)
-        self.assertEqual(results_window_end(r2, 0), T0 + 900)
+        self.assertGoesTo("B", [a, self.battle("B", 16, 29)], [30, 30.1])
 
     def test_a_skipped_battle_does_not_snowball(self):
-        """Three battles, only the last screenshotted: the two skipped ones
-        must not accumulate into a permanent block."""
+        """Three battles, only the last screenshotted."""
         rs = [self.battle("A", 0, 13), self.battle("B", 16, 29),
               self.battle("C", 32, 45)]
-        d = match_cluster(one_cluster([46, 46.1]), rs, cfg())
-        self.assertEqual(d.kind, AUTO)
-        self.assertEqual(d.replay.key, "C")
+        self.assertGoesTo("C", rs, [46, 46.1])
 
 
 class BattleGroupTest(unittest.TestCase):
@@ -452,3 +439,44 @@ class FilteredBattleTest(unittest.TestCase):
         from debrief_uploader.matcher import FILTERED
         r = replay("C", 0, group="cooperative", state=FILTERED)
         self.assertFalse(is_orphan(r, [r], T0 + 3 * 3600, cfg()))
+
+
+class LastBattleOwnsTheScorecardsTest(unittest.TestCase):
+    """Screenshots taken after a battle are that battle's or no battle's.
+    When it is not waiting for any, they are never handed past it to an
+    older battle that is: with pairing never asking, that is how one wrong
+    pairing dragged the next ones after it."""
+
+    def test_a_tab_taken_after_the_last_battle_was_paired(self):
+        rs = [replay("A", 10), replay("B", 13, state=UPLOADED)]
+        d = match_cluster(one_cluster([14, 14.1]), rs, cfg())
+        self.assertEqual((d.kind, d.replay), (NONE, None))
+        self.assertIn("not waiting", d.reason)
+
+    def test_positive_control_without_the_later_battle(self):
+        d = match_cluster(one_cluster([14, 14.1]), [replay("A", 10)], cfg())
+        self.assertEqual((d.kind, d.replay.key), (AUTO, "A"))
+
+    def test_after_a_training_room(self):
+        # as the engine holds one: queued (or uploaded) the moment it is
+        # identified, never waiting for scorecards
+        from debrief_uploader.matcher import READY
+        rs = [replay("A", 5), replay("T", 20, group="training_room", state=READY)]
+        d = match_cluster(one_cluster([20.5, 20.6]), rs, cfg())
+        self.assertEqual(d.kind, NONE)
+        self.assertIn("training room", d.reason)
+
+    def test_waits_while_the_last_battle_is_identified(self):
+        from debrief_uploader.matcher import NEW
+        a, b = replay("A", 10), replay("B", 13, state=NEW)
+        d = match_cluster(one_cluster([14, 14.1]), [a, b], cfg())
+        self.assertEqual(d.kind, NONE)
+        self.assertIn("identified", d.reason)
+        b.state = AWAITING_SHOTS                 # replay-meta answered
+        d = match_cluster(one_cluster([14, 14.1]), [a, b], cfg())
+        self.assertEqual((d.kind, d.replay.key), (AUTO, "B"))
+
+    def test_an_older_paired_battle_does_not_block_a_later_one(self):
+        rs = [replay("A", 5, state=UPLOADED), replay("B", 10)]
+        d = match_cluster(one_cluster([11, 11.1]), rs, cfg())
+        self.assertEqual((d.kind, d.replay.key), (AUTO, "B"))

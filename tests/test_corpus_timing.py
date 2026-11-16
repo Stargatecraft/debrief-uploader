@@ -50,21 +50,33 @@ def sessions(closes, split=2 * 3600):
 
 
 class TestAgainstRealCadence(unittest.TestCase):
+    """Pairing never asks (Greg, 2026-11-16): each set of screenshots goes to
+    the battle that finished last before them. File times cannot order two
+    battles that both finished inside the screenshot delay (the player left
+    one early, played the next, and only then took the first one's
+    scorecards). The battle time printed on the screenshots settles those,
+    and the site sets aside a scorecard whose players are another battle's.
+    So the claim proved here is exactly that: a wrong pairing happens only in
+    a session where two battles closed within the delay of each other."""
 
     @classmethod
     def setUpClass(cls):
         cls.closes = load_closes()
         if len(cls.closes) < 50:
             raise unittest.SkipTest("replay archive not on this machine")
+        cls.t = {n: t for t, n in cls.closes}
 
-    def _run_session(self, batch, shot_delay, cfg):
-        """Simulate: after each battle closes, the player takes two scorecards
-        `shot_delay` seconds later. Every cluster must land on its own battle."""
+    def _run_session(self, batch, shot_delay, cfg, every=1):
+        """Simulate: after each battle closes (every `every`-th one; the
+        rest are skipped), the player takes two scorecards `shot_delay`
+        seconds later. Returns (correct, [(true, got)...], held, missed)."""
         replays = [ReplayRec(key=n, t_close=t, state=AWAITING_SHOTS,
                              match_group="pvp") for t, n in batch]
         by_key = {r.key: r for r in replays}
-        correct = wrong = held = missed = 0
-        for t, n in batch:
+        correct, wrong, held, missed = 0, [], 0, 0
+        for i, (t, n) in enumerate(batch):
+            if i % every:
+                continue
             sh = [ShotRec("a", t + shot_delay), ShotRec("b", t + shot_delay + 7)]
             now = sh[-1].t + cfg["pair_settle"] + 1
             closed, _ = cluster_shots(sh, cfg["pair_gap"], cfg["pair_settle"], now)
@@ -73,7 +85,7 @@ class TestAgainstRealCadence(unittest.TestCase):
                 correct += 1
                 by_key[n].state = UPLOADED
             elif d.kind == AUTO:
-                wrong += 1
+                wrong.append((n, d.replay.key))
                 d.replay.state = UPLOADED
             elif d.kind == HOLD:
                 held += 1
@@ -81,58 +93,55 @@ class TestAgainstRealCadence(unittest.TestCase):
                 missed += 1
         return correct, wrong, held, missed
 
+    def _run(self, shot_delay, every=1):
+        """(correct, wrong, unmatched) over the whole archive.
+
+        Asserts the one way it may go wrong: only in a session where two
+        battles closed within the screenshot delay (plus grace) of each
+        other. Once one of those has taken the other's scorecards, later sets
+        in the same session can follow on, which is why this is per session
+        and not per pair."""
+        cfg = dict(DEFAULTS)
+        reach = shot_delay + cfg["grace"]
+        correct, wrong, held, missed = 0, 0, 0, 0
+        for batch in sessions(self.closes):
+            c, w, h, m = self._run_session(batch, shot_delay, cfg, every)
+            correct, held, missed = correct + c, held + h, missed + m
+            wrong += len(w)
+            tight = any(b[0] - a[0] <= reach for a, b in zip(batch, batch[1:]))
+            if not tight:
+                self.assertEqual(w, [], "no two battles in this session closed "
+                                        "within %d s, so file times alone "
+                                        "order them" % reach)
+        self.assertEqual(held, 0, "pairing never asks")
+        return correct, wrong, missed
+
     def test_every_battle_pairs_with_itself(self):
-        cfg = dict(DEFAULTS)
-        tot = [0, 0, 0, 0]
-        for batch in sessions(self.closes):
-            for i, v in enumerate(self._run_session(batch, 45, cfg)):
-                tot[i] += v
-        correct, wrong, held, missed = tot
-        n = sum(tot)
-        print("\n  %d battles: %d correct, %d WRONG, %d held, %d unmatched"
-              % (n, correct, wrong, held, missed))
-        self.assertEqual(wrong, 0, "a wrong auto-match silently poisons the corpus")
-        self.assertEqual(held, 0, "a diligent player should never be asked")
-        self.assertEqual(missed, 0)
-        self.assertEqual(correct, n)
+        correct, wrong, missed = self._run(45)
+        print("\n  by file time alone, %d battles: %d correct, %d WRONG, %d unmatched"
+              % (correct + wrong + missed, correct, wrong, missed))
+        # Only a pair that closed seconds apart can go wrong (or be left
+        # unattached), and battles are minutes long: the archive's one such
+        # pair (31 Oct, the week the PC clock was moved) is all it may cost.
+        self.assertLessEqual(wrong + missed, 2)
 
-    def test_slow_screenshotter_still_correct(self):
-        """Even a player who takes four minutes to grab the scorecards never
-        gets a wrong auto-match -- at worst the engine asks."""
-        cfg = dict(DEFAULTS)
-        wrong_total = 0
+    def test_slow_screenshotter_errs_only_after_close_battles(self):
+        """A player who takes minutes to grab the scorecards: anything wrong
+        follows two battles that closed within that delay. A set whose own
+        battle was given another's goes to an older battle still waiting, or
+        is left unattached when there is none within 25 minutes."""
         for delay in (10, 60, 120, 240):
-            for batch in sessions(self.closes):
-                _, wrong, _, _ = self._run_session(batch, delay, cfg)
-                wrong_total += wrong
-        self.assertEqual(wrong_total, 0)
+            correct, wrong, missed = self._run(delay)
+            print("\n  by file time alone, scorecards %3d s late: %d correct, %d WRONG, %d unmatched"
+                  % (delay, correct, wrong, missed))
 
-    def test_skipping_screenshots_is_caught_not_guessed(self):
-        """The player screenshots only every other battle. Every decision must
-        be either right or a hold -- never a wrong upload."""
-        cfg = dict(DEFAULTS)
-        wrong = held = correct = 0
-        for batch in sessions(self.closes):
-            replays = [ReplayRec(key=n, t_close=t, state=AWAITING_SHOTS,
-                                 match_group="pvp") for t, n in batch]
-            for i, (t, n) in enumerate(batch):
-                if i % 2:
-                    continue                      # skipped this battle's shots
-                sh = [ShotRec("a", t + 45), ShotRec("b", t + 52)]
-                closed, _ = cluster_shots(sh, cfg["pair_gap"], cfg["pair_settle"],
-                                          sh[-1].t + cfg["pair_settle"] + 1)
-                d = match_cluster(closed[0], replays, cfg)
-                if d.kind == AUTO and d.replay.key == n:
-                    correct += 1
-                    d.replay.state = UPLOADED
-                elif d.kind == AUTO:
-                    wrong += 1
-                    d.replay.state = UPLOADED
-                elif d.kind == HOLD:
-                    held += 1
-        print("\n  every-other-battle: %d correct, %d WRONG, %d held"
-              % (correct, wrong, held))
-        self.assertEqual(wrong, 0, "must never guess when an earlier battle is unpaired")
+    def test_skipping_screenshots_pairs_the_battle_just_played(self):
+        """The player screenshots only every other battle: each set goes to
+        the battle just played, never to the skipped one before it."""
+        correct, wrong, missed = self._run(45, every=2)
+        print("\n  by file time alone, every-other-battle: %d correct, %d WRONG, %d unmatched"
+              % (correct, wrong, missed))
+        self.assertLessEqual(wrong + missed, 2)
 
     def test_tightest_real_gaps_are_handled(self):
         """Sanity: the corpus really does contain the fast back-to-back gaps

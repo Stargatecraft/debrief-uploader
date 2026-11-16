@@ -16,6 +16,13 @@ Two rules, measured on a real archive of ~500 battles, drive everything here:
    a guard: 5% of consecutive battles close within 4 minutes of each other, so
    any window wide enough to cover a delayed results screen (~25 min) spans two
    or three replays.
+
+Pairing never asks (Greg, 2026-11-16). Where the file times alone cannot tell
+two battles apart, the battle time printed on the screenshots names the right
+one, and the site checks every scorecard against the battle's own players and
+start time and sets aside one that belongs to another battle. Only review mode
+and the privacy rules hold a battle for the user, and those decide whether it
+uploads, never which screenshots it gets.
 """
 import re
 from dataclasses import dataclass, field
@@ -26,7 +33,7 @@ from . import screentime
 # ---- replay lifecycle ------------------------------------------------------
 NEW = "new"                      # quarantined, metadata not read yet
 AWAITING_SHOTS = "awaiting_shots"  # metadata read, real battle, needs scorecards
-HELD = "held"                    # matched but a human should confirm
+HELD = "held"                    # waits for the user's Upload
 READY = "ready"                  # matched (or exempt), queued to upload
 UPLOADING = "uploading"
 UPLOADED = "uploaded"
@@ -140,13 +147,17 @@ class Cluster:
         return len(self.shots)
 
 
-# The hold reason engine._recheck_held() may release on start; it is also
-# stored as the start of the held row's note.
+REVIEW_REASON = "review mode is on"
+
+# What builds before 1.9 asked when they could not tell which battle a set of
+# screenshots belonged to, stored as (the start of) the held battle's note.
+# Nothing asks this any more; engine._recheck_held() settles them on start.
 AMBIGUOUS_REASON = "an earlier battle is still missing its scorecards"
+ONE_TAB_REASON = "only one scorecard - the other tab is missing"
 
 # ---- decisions -------------------------------------------------------------
-AUTO = "auto"        # confident: upload it
-HOLD = "hold"        # ambiguous: ask a human, never guess
+AUTO = "auto"        # paired: upload it
+HOLD = "hold"        # paired, but upload only when the user says so
 NONE = "none"        # nothing to attach to (yet)
 LATE = "late"        # screenshots of a battle that is already on the site
 
@@ -155,7 +166,6 @@ LATE = "late"        # screenshots of a battle that is already on the site
 class Decision:
     kind: str
     replay: Optional[ReplayRec] = None
-    alternatives: List[ReplayRec] = field(default_factory=list)
     reason: str = ""
     by_screen: bool = False      # decided by the battle time on the screen
 
@@ -230,15 +240,26 @@ def match_cluster(cluster, replays, cfg):
 
     best = max(cands, key=lambda r: r.t_close)
 
-    # A battle whose type is off in Settings never takes screenshots, but if
-    # it is the latest battle to have finished, these are ITS scorecards.
-    # Refuse rather than skip past it onto an older battle, as for a
-    # training room.
-    off = [r for r in replays if r.state == FILTERED
-           and best.t_close < r.t_close <= t0 + cfg["grace"]]
-    if off:
-        return Decision(NONE, reason="the last battle's type is off in Settings, "
-                                     "so these are not uploaded")
+    # The battle that finished last before these were taken is the one they
+    # are of. When that is not `best`, these are its scorecards or no
+    # battle's, never an older one's: it already has its own (a tab taken
+    # after the others were paired), takes none (a training room, a type
+    # that is off in Settings), was skipped, or is not identified yet. Going
+    # past it onto an older battle is how one wrong pairing used to drag the
+    # next ones after it (test_corpus_timing).
+    later = [r for r in replays if r.key != best.key
+             and best.t_close < r.t_close <= t0 + cfg["grace"]]
+    if later:
+        last = max(later, key=lambda r: r.t_close)
+        if last.state == FILTERED:
+            why = "the last battle's type is off in Settings, so these are not uploaded"
+        elif last.is_training:
+            why = "the last battle was a training room, which has no scorecards"
+        elif last.state == NEW:
+            why = "the last battle is still being identified"
+        else:
+            why = "the last battle before these is not waiting for screenshots"
+        return Decision(NONE, reason=why)
 
     # A training room has no post-battle scorecard screens at all, so these
     # shots are not of it -- and they are not of the battle before it either.
@@ -250,71 +271,20 @@ def match_cluster(cluster, replays, cfg):
     if lag > cfg["max_lag"]:
         return Decision(NONE, reason="nearest battle finished %d min earlier" % (lag // 60))
 
-    # --- condition C: the delayed-results trap ------------------------------
-    # The danger is not "which replay is nearest". It is that the player left
-    # battle A early, queued battle B, and A's results screen only appeared
-    # after B's replay had already closed -- so A's scorecards sit after B.
-    # In a healthy session every replay gets its shots, so nothing older is
-    # ever left unpaired and this never fires. It fires exactly when the user
-    # skipped a battle's screenshots, which is exactly when misattribution is
-    # possible.
-    # An older battle only counts as a rival claimant if its results screen
-    # could plausibly still have been up when these were taken. Without that
-    # check, ONE battle the player never screenshotted holds up every battle
-    # after it, forever -- which is what happened on a real machine: a 08:56
-    # game that ended by 09:11 at the latest was still blocking 09:26
-    # screenshots that obviously belonged to the 09:12 game.
-    older = [r for r in cands
-             if r.key != best.key and r.t_close < best.t_close
-             and t0 - r.t_close <= cfg["max_lag"]
-             and not r.is_training
-             and could_still_be_showing(r, t0, cfg)]
-    if older:
-        older.sort(key=lambda r: r.t_close, reverse=True)
-        return Decision(HOLD, replay=best, alternatives=older,
-                        reason=AMBIGUOUS_REASON)
-
-    if len(cluster) < 2:
-        return Decision(HOLD, replay=best,
-                        reason="only one scorecard - the other tab is missing")
+    # The delayed-results trap: the player left battle A early, played B, and
+    # A's results only came up after B's replay had closed, so A's scorecards
+    # sit after B. Builds before 1.9 held these and asked whenever an older
+    # battle's results could still have been on screen. They now go to B, the
+    # battle just played, which is right far more often than not: the battle
+    # time on the screenshots settles the trap before this rule is reached
+    # (match_by_screen), and a scorecard of A that does reach B is caught by
+    # the site, which matches its player names and start time against B's
+    # own. One tab is paired too; the site reads whichever tab it is given.
 
     if cfg.get("review_mode"):
-        return Decision(HOLD, replay=best, reason="review mode is on")
+        return Decision(HOLD, replay=best, reason=REVIEW_REASON)
 
     return Decision(AUTO, replay=best, reason="matched %ds after the battle closed" % int(lag))
-
-
-def results_window_end(r, grace):
-    """The last moment this battle's results screen could still be on screen.
-
-    A replay file closes when the player LEAVES the battle, which for an early
-    death is long before the battle actually ends -- and the results screen
-    only appears at the real end. So a battle someone left at 0:18 can still
-    produce scorecards fifteen minutes later.
-
-    elapsed = t_close - header_dt is how much of the battle had been played
-    when the file closed, so `duration - elapsed` is what was left to run.
-    Both timestamps must be on the same clock for that subtraction to mean
-    anything, which is exactly what skew_is_sane checks -- 36% of one measured
-    archive had the game clock a whole -9h from the filesystem clock.
-
-    Returns None when it cannot be known, and callers must stay conservative.
-    """
-    elapsed = clock_skew(r)
-    if not skew_is_sane(elapsed) or not r.duration:
-        return None
-    remaining = max(0.0, r.duration - elapsed)
-    return r.t_close + remaining + grace
-
-
-def could_still_be_showing(r, t0, cfg):
-    """Could these screenshots be of THIS battle's results screen?
-
-    True when unknowable: never let a missing timestamp turn into a confident
-    wrong answer.
-    """
-    end = results_window_end(r, cfg.get("results_grace", 300))
-    return end is None or t0 <= end
 
 
 def is_orphan(replay, replays, now, cfg):
@@ -384,10 +354,6 @@ def match_by_screen(cluster, screen, mode, replays, cfg, offset_s=0.0):
                         reason="the battle time on these screenshots (%s) "
                                "is not the nearest battle's (started %s)"
                                % (_hhmm(screen), _hhmm(d.replay.header_time)))
-    if d.alternatives:
-        d.alternatives = [a for a in d.alternatives
-                          if screentime.relation(screen, a.header_time, offset_s)
-                          != screentime.CONTRADICTS]
     return d
 
 
@@ -411,11 +377,8 @@ def _named_by_screen(cluster, r, screen, cfg):
         return Decision(NONE, reason="these are of a battle that already has "
                                      "its screenshots or is not waiting for "
                                      "them (%s)" % when)
-    if len(cluster) < 2:
-        return Decision(HOLD, replay=r,
-                        reason="only one scorecard - the other tab is missing")
     if cfg.get("review_mode"):
-        return Decision(HOLD, replay=r, reason="review mode is on")
+        return Decision(HOLD, replay=r, reason=REVIEW_REASON)
     if r.state == UPLOADED:
         if r.backfill:
             return Decision(HOLD, replay=r, reason="screenshots found for a battle "

@@ -173,7 +173,7 @@ def cmd_status(args):
 
 
 def cmd_review(args):
-    """Resolve everything the engine refused to guess at."""
+    """Upload or skip each battle waiting for the user."""
     s, store, client, log = _boot(echo=False)
     held = [r for r in store.replays([matcher.HELD])]
     orphans = [r for r in store.replays([matcher.ORPHAN])]

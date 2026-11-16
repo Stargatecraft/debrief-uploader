@@ -289,10 +289,12 @@ class TestMatcherWithScreenTime(unittest.TestCase):
         self.assertEqual((d.kind, d.replay.key), (matcher.AUTO, "A"),
                          "the time settles the older-battle ambiguity")
 
-    def test_one_tab_or_review_mode_holds(self):
+    def test_one_tab_pairs_and_review_mode_holds(self):
+        # A is already on the site without scorecards: one tab is added to
+        # it, as two would be (it used to be held and asked about)
         d = matcher.match_by_screen(matcher.Cluster(self.shots[:1]),
                                     P("09.11.2026 20:27"), None, self.recs, self.cfg)
-        self.assertEqual((d.kind, d.replay.key), (matcher.HOLD, "A"))
+        self.assertEqual((d.kind, d.replay.key), (matcher.LATE, "A"))
         self.cfg["review_mode"] = True
         d = matcher.match_by_screen(matcher.Cluster(self.shots[:2]),
                                     P("09.11.2026 20:27"), None, self.recs, self.cfg)
