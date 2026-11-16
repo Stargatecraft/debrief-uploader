@@ -691,6 +691,28 @@ class TestDiagnostics(EngineCase):
         lines = "\n".join(self.eng.diagnose())
         self.assertIn("held", lines)
 
+    def test_diagnose_says_how_often_the_battle_time_was_read(self):
+        """The printed battle time pairs a screenshot with its battle; file
+        times are the fallback. How often this PC reads it is the number
+        that says how often the fallback is used."""
+        now = time.time()
+        self.store.add_replay(md5="M1", filename="m1.wowsreplay",
+                              staged_path="/staged/m1", t_close=now - 600,
+                              state=matcher.UPLOADED)
+        for i, (text, w, h) in enumerate((("2026-11-16 20:01", 1920, 1080),
+                                          ("2026-11-16 20:01", 1920, 1080),
+                                          ("", 1280, 720))):
+            p = "/shots/s%d.png" % i
+            self.store.add_shot(p, now - 500 + i, w, h)
+            self.store.attach_shots([p], "M1")
+            self.store.set_screen_header(p, text, None)
+        # a screenshot that went with no battle is not counted
+        self.store.add_shot("/shots/free.png", now - 100, 800, 600)
+        self.store.set_screen_header("/shots/free.png", "", None)
+        text = "\n".join(self.eng.diagnose())
+        self.assertIn("read on 2 of 3 screenshots that went with a battle", text)
+        self.assertIn("not read: 1 (1280x720)", text)
+
     def test_counts_covers_every_state(self):
         c = self.eng.counts()
         for k in (matcher.NEW, matcher.AWAITING_SHOTS, matcher.HELD,

@@ -1045,6 +1045,25 @@ class Engine:
             add("  %s  %s" % (time.strftime("%H:%M:%S", time.localtime(sh["t"])),
                               os.path.basename(sh["path"])))
 
+        # The battle time printed on a screenshot is what pairs it with the
+        # right battle; file times are only the fallback. How often this PC
+        # can read it is the one number that says how much the fallback is
+        # used.
+        add("")
+        add("BATTLE TIME ON SCREENSHOTS")
+        read, unread, sizes = self.store.screen_time_counts()
+        if not screenocr.available():
+            add("  not read on this PC (%s): screenshots pair by the time "
+                "they were taken" % screenocr.why_unavailable())
+        if read + unread:
+            add("  read on %d of %d screenshots that went with a battle"
+                % (read, read + unread))
+            if unread:
+                add("  not read: %d%s" % (unread, " (%s)" % ", ".join(sizes)
+                                          if sizes else ""))
+        else:
+            add("  none read yet")
+
         add("")
         add("WHAT THE MATCHER WOULD DO RIGHT NOW")
         if not free:

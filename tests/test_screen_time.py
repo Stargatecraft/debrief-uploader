@@ -698,6 +698,98 @@ class TestWindowsOcr(unittest.TestCase):
         self.assertEqual(got[p], (None, None))
 
 
+FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "screen_corners")
+
+
+def real_corner_screens(tmp):
+    """[(path, expected time, mode line, from port)] for the real result
+    screens in fixtures/screen_corners.
+
+    Each fixture is the band the reader crops (BAND_W x BAND_H of the
+    picture) from one of Greg's own result screenshots, every pixel painted
+    over except the result, mode/map and date lines: no menus, no division
+    panel, no names. It goes back onto a canvas the size of the picture it
+    came from, so read_headers crops and scales it exactly as it would have
+    the screenshot. The expected time is what the site read off the whole
+    screenshot and matched to that battle's replay."""
+    import json
+    with open(os.path.join(FIXTURES, "manifest.json")) as f:
+        manifest = json.load(f)
+    out = []
+    for m in manifest:
+        with Image.open(os.path.join(FIXTURES, m["file"])) as band:
+            band.load()
+            # lit like the game picture, or a wide canvas reads as black
+            # side bars and is trimmed (the band itself is pasted unchanged)
+            fill = max(band.getpixel((band.width - 1, band.height - 1)),
+                       screenocr.images.BAR_LUMA + 16)
+            canvas = Image.new("L", (m["w"], m["h"]), fill)
+            canvas.paste(band, (0, 0))
+        p = os.path.join(tmp, m["file"].replace(".jpg", ".png"))
+        canvas.save(p)
+        out.append((p, P(m["time"]), m["mode"], m["from_port"]))
+    return out
+
+
+class TestRealCornerFixtures(unittest.TestCase):
+    """The fixtures put back on their canvas crop to exactly the band they
+    were cut as: otherwise the Windows test below would be reading
+    something other than what the app reads."""
+
+    def test_canvas_crops_back_to_the_fixture(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            screens = real_corner_screens(tmp)
+            self.assertGreaterEqual(len(screens), 40)
+            self.assertGreaterEqual(sum(1 for s in screens if s[3]), 5,
+                                    "screens reopened from port, where the "
+                                    "lines sit lower")
+            for p, _t, _m, _port in screens:
+                with Image.open(p) as im:
+                    w, h = im.size
+                    self.assertEqual(screenocr.images.pillarbox_bounds(im), (0, w), p)
+                name = os.path.basename(p).replace(".png", ".jpg")
+                with Image.open(os.path.join(FIXTURES, name)) as band:
+                    self.assertEqual(band.size, (int(w * screenocr.BAND_W),
+                                                 int(h * screenocr.BAND_H)), p)
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows OCR")
+class TestWindowsOcrOnRealScreens(unittest.TestCase):
+    """The real Windows.Media.Ocr pass on real result screens, not drawn
+    ones. How often it reads the time is how often pairing can use it
+    instead of falling back to file times."""
+
+    def test_reads_real_result_screens(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            screens = real_corner_screens(tmp)
+            got = screenocr.read_headers([s[0] for s in screens])
+            if not got:
+                self.skipTest("Windows OCR unavailable here: %s"
+                              % screenocr.why_unavailable())
+            read, missed, wrong = 0, [], []
+            for p, want, _mode, port in screens:
+                dt = (got.get(p) or (None, None))[0]
+                if dt is None:
+                    missed.append(os.path.basename(p) + (" (port)" if port else ""))
+                elif dt != want:
+                    wrong.append((os.path.basename(p), str(dt), str(want)))
+                else:
+                    read += 1
+            print("\nWindows OCR on %d real result screens: read %d, not read %d %s, "
+                  "misread %d %s" % (len(screens), read, len(missed), missed,
+                                     len(wrong), wrong))
+            self.assertEqual(wrong, [], "a misread time names the wrong battle")
+            self.assertGreaterEqual(read, 0.9 * len(screens))
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 @unittest.skipUnless(sys.platform == "win32", "Windows OCR")
 class TestWindowsEndToEnd(LateSetsBase):
     """Greg's case through the engine with the REAL Windows OCR reading

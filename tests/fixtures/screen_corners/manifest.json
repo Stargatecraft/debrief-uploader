@@ -1,0 +1,410 @@
+[
+ {
+  "file": "corner_00.jpg",
+  "w": 1600,
+  "h": 1042,
+  "time": "13.10.2026 16:04",
+  "mode": "STANDARD - DOMINATION - STRAIT",
+  "from_port": false
+ },
+ {
+  "file": "corner_01.jpg",
+  "w": 1600,
+  "h": 915,
+  "time": "17.07.2026 15:59",
+  "mode": "STANDARD - DOMINATION - GREECE",
+  "from_port": false
+ },
+ {
+  "file": "corner_02.jpg",
+  "w": 1600,
+  "h": 1000,
+  "time": "08.07.2026 16:11",
+  "mode": "STANDARD - DOMINATION - NORTH",
+  "from_port": false
+ },
+ {
+  "file": "corner_03.jpg",
+  "w": 1600,
+  "h": 746,
+  "time": "19.07.2026 16:59",
+  "mode": "RANKED - DOMINATION - NEW DAWN",
+  "from_port": false
+ },
+ {
+  "file": "corner_04.jpg",
+  "w": 1600,
+  "h": 999,
+  "time": "09.07.2026 20:21",
+  "mode": "STANDARD - CAPTURE THE BASE - ISLANDS",
+  "from_port": false
+ },
+ {
+  "file": "corner_05.jpg",
+  "w": 1600,
+  "h": 768,
+  "time": "21.07.2026 11:42",
+  "mode": "STANDARD - DOMINATION - STRAIT",
+  "from_port": false
+ },
+ {
+  "file": "corner_06.jpg",
+  "w": 1600,
+  "h": 573,
+  "time": "19.07.2026 18:05",
+  "mode": "RANKED - DOMINATION - LOOP",
+  "from_port": false
+ },
+ {
+  "file": "corner_07.jpg",
+  "w": 1200,
+  "h": 782,
+  "time": "24.08.2026 07:25",
+  "mode": "STANDARD - DOMINATION - WARRIOR'S PATH",
+  "from_port": false
+ },
+ {
+  "file": "corner_08.jpg",
+  "w": 1600,
+  "h": 555,
+  "time": "19.07.2026 20:23",
+  "mode": "RANKED - DOMINATION - MOUNTAIN RANGE",
+  "from_port": false
+ },
+ {
+  "file": "corner_09.jpg",
+  "w": 1200,
+  "h": 577,
+  "time": "20.07.2026 14:51",
+  "mode": "STANDARD - DOMINATION - TRIDENT",
+  "from_port": false
+ },
+ {
+  "file": "corner_10.jpg",
+  "w": 1600,
+  "h": 515,
+  "time": "19.07.2026 20:01",
+  "mode": "RANKED - DOMINATION - RIPOSTE",
+  "from_port": false
+ },
+ {
+  "file": "corner_11.jpg",
+  "w": 1600,
+  "h": 714,
+  "time": "20.07.2026 21:48",
+  "mode": "STANDARD - DOMINATION - TRIDENT",
+  "from_port": false
+ },
+ {
+  "file": "corner_12.jpg",
+  "w": 1600,
+  "h": 803,
+  "time": "19.07.2026 17:53",
+  "mode": "RANKED - DOMINATION - LOOP",
+  "from_port": false
+ },
+ {
+  "file": "corner_13.jpg",
+  "w": 1200,
+  "h": 557,
+  "time": "20.07.2026 14:51",
+  "mode": "STANDARD - DOMINATION - TRIDENT",
+  "from_port": false
+ },
+ {
+  "file": "corner_14.jpg",
+  "w": 1600,
+  "h": 1042,
+  "time": "26.09.2026 10:34",
+  "mode": "STANDARD - DOMINATION - NORTHERN WATERS",
+  "from_port": false
+ },
+ {
+  "file": "corner_15.jpg",
+  "w": 1600,
+  "h": 915,
+  "time": "19.07.2026 15:49",
+  "mode": "STANDARD - EPICENTER - TRIDENT",
+  "from_port": false
+ },
+ {
+  "file": "corner_16.jpg",
+  "w": 1600,
+  "h": 1000,
+  "time": "10.07.2026 18:21",
+  "mode": "STANDARD - CAPTURE THE BASE - RING",
+  "from_port": false
+ },
+ {
+  "file": "corner_17.jpg",
+  "w": 1600,
+  "h": 999,
+  "time": "09.07.2026 21:39",
+  "mode": "STANDARD - CAPTURE THE BASE - ISLANDS",
+  "from_port": false
+ },
+ {
+  "file": "corner_18.jpg",
+  "w": 1600,
+  "h": 766,
+  "time": "20.07.2026 10:11",
+  "mode": "STANDARD - DOMINATION - LAND OF FIRE",
+  "from_port": false
+ },
+ {
+  "file": "corner_19.jpg",
+  "w": 1600,
+  "h": 561,
+  "time": "19.07.2026 19:25",
+  "mode": "RANKED - DOMINATION - NEW DAWN",
+  "from_port": false
+ },
+ {
+  "file": "corner_20.jpg",
+  "w": 1200,
+  "h": 782,
+  "time": "23.07.2026 16:37",
+  "mode": "STANDARD - DOMINATION - TRIDENT",
+  "from_port": false
+ },
+ {
+  "file": "corner_21.jpg",
+  "w": 1600,
+  "h": 556,
+  "time": "19.07.2026 20:10",
+  "mode": "RANKED - DOMINATION - LAND OF FIRE",
+  "from_port": false
+ },
+ {
+  "file": "corner_22.jpg",
+  "w": 1600,
+  "h": 507,
+  "time": "19.07.2026 20:16",
+  "mode": "RANKED - DOMINATION - NEW DAWN",
+  "from_port": false
+ },
+ {
+  "file": "corner_23.jpg",
+  "w": 1600,
+  "h": 716,
+  "time": "19.07.2026 20:01",
+  "mode": "RANKED - DOMINATION - RIPOSTE",
+  "from_port": false
+ },
+ {
+  "file": "corner_24.jpg",
+  "w": 1600,
+  "h": 1042,
+  "time": "28.08.2026 13:12",
+  "mode": "STANDARD - CAPTURE THE BASE - ESTUARY",
+  "from_port": false
+ },
+ {
+  "file": "corner_25.jpg",
+  "w": 1600,
+  "h": 915,
+  "time": "14.07.2026 11:28",
+  "mode": "STANDARD - DOMINATION - TEARS OF THE DESERT",
+  "from_port": false
+ },
+ {
+  "file": "corner_26.jpg",
+  "w": 1600,
+  "h": 1000,
+  "time": "09.07.2026 20:03",
+  "mode": "VERSUS AI - CAPTURE THE BASE - ISLANDS",
+  "from_port": false
+ },
+ {
+  "file": "corner_27.jpg",
+  "w": 1600,
+  "h": 742,
+  "time": "20.07.2026 22:47",
+  "mode": "STANDARD - DOMINATION - FAULT LINE",
+  "from_port": false
+ },
+ {
+  "file": "corner_28.jpg",
+  "w": 1600,
+  "h": 999,
+  "time": "09.07.2026 17:01",
+  "mode": "VERSUS AI - DOMINATION - CRASH ZONE",
+  "from_port": false
+ },
+ {
+  "file": "corner_29.jpg",
+  "w": 1600,
+  "h": 769,
+  "time": "20.07.2026 11:35",
+  "mode": "STANDARD - DOMINATION - NORTHERN WATERS",
+  "from_port": false
+ },
+ {
+  "file": "corner_30.jpg",
+  "w": 1600,
+  "h": 561,
+  "time": "19.07.2026 18:47",
+  "mode": "RANKED - DOMINATION - SCANDINAVIA",
+  "from_port": false
+ },
+ {
+  "file": "corner_31.jpg",
+  "w": 1200,
+  "h": 782,
+  "time": "23.07.2026 16:37",
+  "mode": "STANDARD - DOMINATION - TRIDENT",
+  "from_port": false
+ },
+ {
+  "file": "corner_32.jpg",
+  "w": 1600,
+  "h": 552,
+  "time": "19.07.2026 19:17",
+  "mode": "RANKED - DOMINATION - NEW DAWN",
+  "from_port": false
+ },
+ {
+  "file": "corner_33.jpg",
+  "w": 1600,
+  "h": 703,
+  "time": "20.07.2026 21:48",
+  "mode": "STANDARD - DOMINATION - TRIDENT",
+  "from_port": false
+ },
+ {
+  "file": "corner_34.jpg",
+  "w": 1600,
+  "h": 1042,
+  "time": "30.10.2026 11:14",
+  "mode": "STANDARD - CAPTURE THE BASE - TWO BROTHERS",
+  "from_port": false
+ },
+ {
+  "file": "corner_35.jpg",
+  "w": 1600,
+  "h": 915,
+  "time": "17.07.2026 19:58",
+  "mode": "VERSUS AI - DOMINATION - HAVEN",
+  "from_port": false
+ },
+ {
+  "file": "corner_36.jpg",
+  "w": 1600,
+  "h": 1000,
+  "time": "09.07.2026 15:57",
+  "mode": "VERSUS AI - CAPTURE THE BASE - ISLANDS",
+  "from_port": false
+ },
+ {
+  "file": "corner_37.jpg",
+  "w": 1600,
+  "h": 756,
+  "time": "20.07.2026 22:47",
+  "mode": "STANDARD - DOMINATION - FAULT LINE",
+  "from_port": false
+ },
+ {
+  "file": "corner_38.jpg",
+  "w": 1600,
+  "h": 999,
+  "time": "09.07.2026 21:39",
+  "mode": "STANDARD - CAPTURE THE BASE - ISLANDS",
+  "from_port": false
+ },
+ {
+  "file": "corner_39.jpg",
+  "w": 1600,
+  "h": 771,
+  "time": "19.07.2026 20:23",
+  "mode": "RANKED - DOMINATION - MOUNTAIN RANGE",
+  "from_port": false
+ },
+ {
+  "file": "corner_40.jpg",
+  "w": 1600,
+  "h": 561,
+  "time": "19.07.2026 19:51",
+  "mode": "RANKED - DOMINATION - LOOP",
+  "from_port": false
+ },
+ {
+  "file": "corner_41.jpg",
+  "w": 1200,
+  "h": 782,
+  "time": "24.08.2026 06:24",
+  "mode": "STANDARD - DOMINATION - CRASH ZONE",
+  "from_port": false
+ },
+ {
+  "file": "corner_42.jpg",
+  "w": 1600,
+  "h": 556,
+  "time": "19.07.2026 19:04",
+  "mode": "RANKED - DOMINATION - MOUNTAIN RANGE",
+  "from_port": false
+ },
+ {
+  "file": "corner_43.jpg",
+  "w": 1600,
+  "h": 1042,
+  "time": "05.11.2026 21:08",
+  "mode": "STANDARD - CAPTURE THE BASE - THE ATLANTIC",
+  "from_port": false
+ },
+ {
+  "file": "corner_44.jpg",
+  "w": 1600,
+  "h": 915,
+  "time": "12.07.2026 20:57",
+  "mode": "STANDARD - DOMINATION - WARRIOR'S PATH",
+  "from_port": false
+ },
+ {
+  "file": "corner_45.jpg",
+  "w": 1600,
+  "h": 1039,
+  "time": "14.09.2026 15:29",
+  "mode": "STANDARD - DOMINATION - NORTHERN WATERS",
+  "from_port": true
+ },
+ {
+  "file": "corner_46.jpg",
+  "w": 1600,
+  "h": 1042,
+  "time": "26.08.2026 08:21",
+  "mode": "STANDARD - DOMINATION - LOOP",
+  "from_port": true
+ },
+ {
+  "file": "corner_47.jpg",
+  "w": 1600,
+  "h": 1042,
+  "time": "15.09.2026 08:26",
+  "mode": "STANDARD - EPICENTER - BIG RACE",
+  "from_port": true
+ },
+ {
+  "file": "corner_48.jpg",
+  "w": 1600,
+  "h": 1042,
+  "time": "15.09.2026 08:26",
+  "mode": "STANDARD - EPICENTER - BIG RACE",
+  "from_port": true
+ },
+ {
+  "file": "corner_49.jpg",
+  "w": 1600,
+  "h": 1042,
+  "time": "14.09.2026 15:29",
+  "mode": "STANDARD - DOMINATION - NORTHERN WATERS",
+  "from_port": true
+ },
+ {
+  "file": "corner_50.jpg",
+  "w": 1600,
+  "h": 1042,
+  "time": "26.08.2026 08:21",
+  "mode": "STANDARD - DOMINATION - LOOP",
+  "from_port": true
+ }
+]

@@ -211,6 +211,16 @@ class Store:
         self._write("UPDATE shots SET screen_time=?, screen_mode=? WHERE path=?",
                     (screen_time, mode, path))
 
+    def screen_time_counts(self):
+        """How well this PC reads the battle time off the screenshots that
+        went with a battle: (read, unreadable, the unreadable ones' sizes)."""
+        rows = self._all("SELECT screen_time, width, height FROM shots "
+                         "WHERE replay_md5 IS NOT NULL AND screen_time IS NOT NULL")
+        bad = [r for r in rows if not r["screen_time"]]
+        sizes = sorted({"%dx%d" % (r["width"], r["height"])
+                        for r in bad if r["width"] and r["height"]})
+        return len(rows) - len(bad), len(bad), sizes
+
     def screen_pairs(self, limit=50):
         """(screen_time, played_at) of recent screenshots that went with a
         battle, to learn this PC's clock error from."""
